@@ -3,18 +3,17 @@
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
+import { agents, spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
 import { CURRENT, logArgs, parseLog, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
 import { CHANGED, Menu, Dialog, act, openMenu, openDialog, runPlan } from "./overlay.js";
 import { plan } from "./actions.js";
 import { BUN, CLI } from "./paths.js";
-import { PICKS, pickRepo, repoName } from "./repos.js";
+import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
-  const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
+  return { cwd: folderOf(space, f, panes(), agents()), on };
 }
 // What the pane shows: the focused folder, and the repo picked in its family.
 const key = () => JSON.stringify({ ...location(), picks: shared(PICKS) ?? null });

@@ -7,7 +7,7 @@ import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualLi
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
 import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
-import { PICKS, pickRepo, repoName } from "./repos.js";
+import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
 const RESTORE_CLIPBOARD_MS = 1500;
 const STATE_DIR = () => `${home()}/.local/state/herdr-review`;
@@ -126,7 +126,8 @@ export default class Review extends View {
   async locate() {
     const space = spaces().find((s) => s.id === this.space) ?? spaces().find((s) => s.active), on = space?.machine ?? null;
     this.on = on;
-    const cwd = this.from ?? this.claudes().find((a) => a.address === this.claude)?.cwd ?? focused()?.cwd ?? space?.folder;
+    const f = focused()?.space === space?.id ? focused() : null;
+    const cwd = this.from ?? this.claudes().find((a) => a.address === this.claude)?.cwd ?? folderOf(space, f, panes(), agents());
     if (!cwd) return null;
     const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
     if (top.code !== 0) return null;

@@ -9,6 +9,16 @@ export const NESTED = "find . -maxdepth 4 \\( -name node_modules -o -name vendor
 
 export const pickKey = (on, found) => `${on ?? ""}:${found}`;
 
+// The folder the focus is in: the focused terminal's; with a mod pane focused (the Git or Review tab itself, which has none), the space's latest agent's, else one of its terminals', else the space's own folder.
+export function folderOf(space, f, panes, agents) {
+  const pane = f?.pane ? panes.find((p) => p.pane === f.pane) : null;
+  if (pane?.cwd || f?.cwd) return pane?.cwd || f.cwd;
+  const tabs = new Set((space?.tabs ?? []).map((t) => t.id));
+  const cwds = new Map(panes.filter((p) => tabs.has(p.tab) && p.cwd).map((p) => [p.pane, p.cwd]));
+  const agent = agents.filter((a) => cwds.has(a.pane)).sort((a, b) => b.seq - a.seq)[0];
+  return cwds.get(agent?.pane) ?? cwds.values().next().value ?? space?.folder;
+}
+
 // The family of the repo `found` holds: the repo around it, when it is itself nested, else itself; then each repo nested in that one.
 export async function familyOf(found, run) {
   const up = await run("git", ["rev-parse", "--show-toplevel"], `${found}/..`);

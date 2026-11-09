@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { choose, familyOf, repoName } from './repos.js'
+import { choose, familyOf, folderOf, repoName } from './repos.js'
 
 function run(cmd: string, args: string[], cwd: string) {
   const r = Bun.spawnSync([cmd, ...args], { cwd, env: process.env })
@@ -41,5 +41,36 @@ describe('a repo family', () => {
 
   test('the review mod carries the same copy', () => {
     expect(readFileSync(join(import.meta.dir, '../review/repos.js'), 'utf8')).toBe(readFileSync(join(import.meta.dir, 'repos.js'), 'utf8'))
+  })
+})
+
+describe('the folder a pane shows', () => {
+  const space = { id: 's1', folder: '/home/me', tabs: [{ id: 'git' }, { id: 'work' }, { id: 'side' }] }
+  const panes = [
+    { pane: 'p-git', tab: 'git', mod: 'git', terminal: null, cwd: null },
+    { pane: 'p-shell', tab: 'side', terminal: 't1', cwd: '/home/me/notes' },
+    { pane: 'p-claude', tab: 'work', terminal: 't2', cwd: '/home/me/zshrc' },
+    { pane: 'p-other', tab: 'elsewhere', terminal: 't3', cwd: '/home/me/other' },
+  ]
+  const agents = [{ pane: 'p-claude', seq: 4 }, { pane: 'p-other', seq: 9 }]
+
+  test('is the focused terminal\'s', () => {
+    expect(folderOf(space, { pane: 'p-shell', cwd: null }, panes, agents)).toBe('/home/me/notes')
+  })
+
+  test('with its own tab focused, is the space\'s latest agent\'s, not the space\'s folder', () => {
+    expect(folderOf(space, { pane: 'p-git', cwd: null }, panes, agents)).toBe('/home/me/zshrc')
+  })
+
+  test('with no agent in the space, is one of its terminals\'', () => {
+    expect(folderOf(space, { pane: 'p-git', cwd: null }, panes, [])).toBe('/home/me/notes')
+  })
+
+  test('with no terminal in the space, is the space\'s folder', () => {
+    expect(folderOf(space, { pane: 'p-git', cwd: null }, [panes[0]], [])).toBe('/home/me')
+  })
+
+  test('with a layout terminal block focused, is that block\'s', () => {
+    expect(folderOf(space, { pane: null, cwd: '/srv/app' }, panes, agents)).toBe('/srv/app')
   })
 })
