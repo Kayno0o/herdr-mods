@@ -145,3 +145,12 @@ test('a path under the home folder starts from ~, another is left whole', () => 
   expect(tildePath('/home/anabel/app', '/home/ana')).toBe('/home/anabel/app')
   expect(tildePath('/srv/app', '')).toBe('/srv/app')
 })
+
+test('a long note is cut between words, a word wider than the card mid-word', () => {
+  const words = `${'word '.repeat(40)}end`
+  const lines = noteLines(words)
+
+  expect(lines.every((line: string) => !line.startsWith(' ') && !line.endsWith(' '))).toBe(true)
+  expect(lines.join(' ')).toBe(words)
+  expect(noteLines('x'.repeat(230))).toHaveLength(3)
+})

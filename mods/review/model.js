@@ -78,11 +78,18 @@ export function placeNotes(rows, notes) {
   return placed;
 }
 
-// A note's body as the lines its card shows, long lines cut and the rest left for the panel under the list.
+// A note's body as the lines its card shows, long lines cut at a space (mid-word only for a word wider than the card) and the rest left for the panel under the list.
 export function noteLines(body) {
   const lines = body.trim().split("\n").flatMap((line) => {
     const cut = [];
-    for (let i = 0; i < Math.max(line.length, 1); i += NOTE_COLUMNS) cut.push(line.slice(i, i + NOTE_COLUMNS));
+    let rest = line;
+    while (rest.length > NOTE_COLUMNS) {
+      const space = rest.lastIndexOf(" ", NOTE_COLUMNS);
+      const at = space > 0 ? space : NOTE_COLUMNS;
+      cut.push(rest.slice(0, at));
+      rest = rest.slice(space > 0 ? at + 1 : at);
+    }
+    cut.push(rest);
     return cut;
   });
   return lines.length > NOTE_LINES ? [...lines.slice(0, NOTE_LINES - 1), `${lines[NOTE_LINES - 1]}…`] : lines;
