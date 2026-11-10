@@ -5,7 +5,7 @@
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
-import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS } from "./model.js";
+import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
 import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
@@ -881,6 +881,6 @@ export default class Review extends View {
       .child(h_flex().flex_none().h(26).px(14).gap(14).items_center().border_t(1).border_color(t.border).bg(t.chrome).text_size(11).text_color(t.dim)
         .children((this.tab === "inbox" ? KEYS : KEYS.filter(([k]) => ["c", "j k", "enter", "esc"].includes(k))).map(([k, label]) => h_flex().gap(5).items_center().child(this.hint(k, t)).child(label)))
         .child(div().flex_1())
-        .child(div().truncate().max_w(320).child(this.root ?? "")));
+        .child(div().truncate().max_w(320).child(tildePath(this.root ?? "", home()))));
   }
 }

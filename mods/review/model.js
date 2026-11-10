@@ -193,6 +193,9 @@ export function daysLabel(timestamps, now = Date.now()) {
   return `${name(days[0])} – ${name(days.at(-1))}`;
 }
 
+// A path under the home folder written from "~", as the pane headers show it.
+export const tildePath = (path, home) => home && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
+
 // What a comment on a line of the Working diff reads like once pasted into a Claude.
 export const commentText = (path, at, body) => `${path}${at ? `:${at.line}${at.side === "old" ? " (old side)" : ""}` : ""}: ${body.trim()}`;
 

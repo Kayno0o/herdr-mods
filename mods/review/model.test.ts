@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, ROW_H, sideRows, SNAPSHOT, splitFiles, WRAP_H, wrapLine } from './model.js'
+import { buildList, claudeFor, columnsOf, commentText, daysLabel, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -137,4 +137,11 @@ test('a snapshot takes untracked files in and leaves the index alone', () => {
     expect(sh('git status --porcelain')).toBe('?? new.txt')
   }
   finally { repo.cleanup() }
+})
+
+test('a path under the home folder starts from ~, another is left whole', () => {
+  expect(tildePath('/home/ana/code/app', '/home/ana')).toBe('~/code/app')
+  expect(tildePath('/home/ana', '/home/ana')).toBe('~')
+  expect(tildePath('/home/anabel/app', '/home/ana')).toBe('/home/anabel/app')
+  expect(tildePath('/srv/app', '')).toBe('/srv/app')
 })
