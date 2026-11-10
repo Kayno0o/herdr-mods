@@ -1,0 +1,25 @@
+{
+  "name": "herdr-mods",
+  "type": "module",
+  "private": true,
+  "description": "Herdr mods to share: the git graph Changes panel and the Review tab for agents' work and reviews",
+  "exports": {
+    "./shoot/types": "./shoot/types.ts"
+  },
+  "scripts": {
+    "setup": "bun scripts/setup.ts",
+    "check": "bun node_modules/typescript-7/bin/tsc --noEmit && bun scripts/check-mods.ts",
+    "lint": "keslint .",
+    "lint:fix": "keslint --fix .",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "playwright-core": "1.62.1"
+  },
+  "devDependencies": {
+    "@kaynooo/eslint": "^7.1.5",
+    "@types/bun": "^1.4.4",
+    "typescript": "^6.0.3",
+    "typescript-7": "npm:typescript@^7.0.2"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules
+.eslintcache
+# Herdr writes these into each mod folder it checks or loads
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
+.env
