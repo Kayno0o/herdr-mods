@@ -20,7 +20,7 @@ bun install
 bun run setup
 ```
 
-Keep the checkout where it is: the mods point into it. Run `bun run setup` again after every pull.
+Keep the checkout where it is: the mods point into it. Setup points the checkout's Git hooks at `githooks/`, which run it again after every commit, pull or checkout, so the installed mods follow the code.
 
 `setup` installs both mods, the `Ctrl+Shift+R` shortcut, the commit hook and the skill, then downloads the Chromium the screenshots use. It never replaces a shortcut you already bound. If your Herdr layout is one Herdr ships, `setup` prints the command that clones it: run it, then `setup` again.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Installs the mods into Herdr's home, and the commit hook and the review skill into Claude Code; run again after every pull.
+// Installs the mods into Herdr's home, and the commit hook and the review skill into Claude Code; the hooks in githooks/ run it again after every commit, pull or checkout.
 // Each main.js is linked, so Herdr reloads a mod when setup relinks it; every other file is copied, since Herdr refuses a module behind a symlink.
 import type { Keys, Merged } from './install'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -68,6 +68,17 @@ for (const mod of mods) {
 
   wantedKeys = mergeKeys(wantedKeys, keys).value
   report.push(`${mod}: installed in ${to}`)
+}
+
+// Git runs this setup again after every commit, pull or checkout, unless the checkout already sends its hooks elsewhere
+const hooksPath = Bun.spawnSync(['git', '-C', REPO, 'config', '--get', 'core.hooksPath']).stdout.toString().trim()
+
+if (!hooksPath) {
+  Bun.spawnSync(['git', '-C', REPO, 'config', 'core.hooksPath', 'githooks'])
+  report.push('git hooks: setup runs again after every commit, pull or checkout')
+}
+else if (hooksPath !== 'githooks') {
+  report.push(`git hooks: core.hooksPath is ${hooksPath}, so run setup again after every pull`)
 }
 
 const keysFile = join(HERDR, 'keys.json')
