@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { addCommit, syncRepo } from './add'
 import { lineOf, renderView, textAt } from './format'
 import { git } from './git'
+import { markRead } from './inbox'
 import { load } from './store'
 import { makeRepo } from './testing'
 import { summary, view } from './view'
@@ -46,6 +47,15 @@ describe('the inbox of a repo', () => {
     expect(net.ticket).toMatchObject({ number: 1525, screen: 'GLOBAL' })
     expect(view(inbox, '1525', fixup).files[0]!.added).toBe(1)
     expect(summary(inbox).items.map(i => [i.key, i.files, i.read])).toEqual([['#1525', 1, 0], [loose, 1, 0]])
+  })
+
+  test('shows a file read in the net diff as read in each of its commits, the Read box of a commit view marking the net file', () => {
+    const inbox = load('tilid')!
+    const net = view(inbox, '1525')
+
+    markRead(inbox, net.key, net.files)
+    expect(view(inbox, '1525', feat).files.map(f => f.read)).toEqual([true])
+    expect(view(inbox, '1525', fixup).files.map(f => f.read)).toEqual([true])
   })
 
   test('offers the Tilid move on a ticket only once the config names both statuses', () => {

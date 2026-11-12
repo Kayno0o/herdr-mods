@@ -174,6 +174,8 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
   const only = commitRef ? findCommit(inbox, commitRef) : undefined
   const { files, exact } = itemFiles(inbox, item, only)
   const read = inbox.read[item.key] ?? {}
+  // reading is of the item's net change, so a commit's file is read when the net file is, as it was when marked
+  const net = new Map((only ? itemFiles(inbox, item).files : files).map(f => [fileKey(f.repo, f.path), digest(f.patch)]))
 
   return {
     project: inbox.project,
@@ -189,9 +191,9 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
     commit: only?.sha ?? null,
     commits: item.commits.map(({ sha, repo, ts, subject, author, copies, terminal }) => ({ sha, repo, ts, subject, author, copies, terminal })),
     files: files.map((f) => {
-      const d = digest(f.patch)
+      const key = fileKey(f.repo, f.path)
 
-      return { ...f, digest: d, read: read[fileKey(f.repo, f.path)] === d }
+      return { ...f, digest: digest(f.patch), read: net.has(key) && read[key] === net.get(key) }
     }),
     notes: inbox.notes.filter(n => n.item === item.key),
     shots: inbox.shots.filter(s => s.item === item.key).map(s => ({ ...s, before: s.before && join(shotsDir(inbox.project), s.before), after: s.after && join(shotsDir(inbox.project), s.after) })),
