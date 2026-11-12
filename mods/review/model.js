@@ -166,12 +166,12 @@ export function fileJump(list, cursor, step, count) {
 
 // The rail's items in its order: tickets, loose commits, then the approved ones, newest first, while shown.
 export function railGroups(items) {
-  return { tickets: items.filter((i) => i.ticket && !i.approved), loose: items.filter((i) => !i.ticket && !i.approved), done: items.filter((i) => i.approved) };
+  return { tickets: items.filter((i) => i.ticket && !i.approved), loose: items.filter((i) => !i.ticket && !i.approved), done: items.filter((i) => i.approved).reverse() };
 }
 
 export function railOrder(items, history) {
   const { tickets, loose, done } = railGroups(items);
-  return [...tickets, ...loose, ...history ? done.slice().reverse() : []];
+  return [...tickets, ...loose, ...history ? done : []];
 }
 
 // The list index of the next open note after `from`, wrapping around.

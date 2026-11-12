@@ -3,7 +3,7 @@
 // Keys, while the tab has the keyboard: r read and next (unread again on a read file), n next open note, c comment, a approve, s send the notes, j/k move, J/K next and previous file, ] and [ next and previous item, p the screens, enter open, v/x/d resolve, reject, delete the picked note; in the screens, ←/→ (h/l) move, b flips before and after, m side by side.
 
 import { View, div, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
 import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
@@ -78,7 +78,7 @@ export default class Review extends View {
     // Every space has its own Review tab, and the shared request reaches them all: each keeps to its space's requests and Claudes. A tab opened before its space was a prop takes it at its first draw, since a tab draws only while its space shows.
     this.space = p.space ?? null;
     this.h = cx.focus_handle();
-    this.scroll = VirtualListScrollHandle.new();
+    this.scroll = VirtualListScrollHandle.new(); this.railScroll = ScrollHandle.new(); this.revealRail = false; this.railAt = -1;
     this.tab = "inbox";
     this.root = null; this.from = null; this.on = null; this.error = null; this.busy = null;
     this.families = new Map(); this.family = null; this.picksSeen = shared(PICKS);
@@ -108,9 +108,10 @@ export default class Review extends View {
     });
   }
 
-  // Takes an open request: its tab, repo, item and commit, and the Claude it came from, else the space's first.
+  // Takes an open request: its tab, repo, item and commit, the screen to open it on, and the Claude it came from, else the space's first.
   ask(p) {
     this.requested = p.at ?? 0;
+    this.wantShot = Number.isInteger(p.shot) ? p.shot : null;
     if (p.tab === "working" || p.tab === "inbox") this.tab = p.tab;
     if (p.item || p.commit) { this.tab = "inbox"; this.itemKey = p.item ?? null; this.commit = p.commit ?? null; this.wanted = p.commit ?? null; }
     this.from = p.root ?? null;
@@ -205,11 +206,15 @@ export default class Review extends View {
     if (project !== this.project) { this.project = project; this.watch(cx); }
     this.showItem(key, item);
     await this.copyShots();
+    if (this.wantShot !== null && item?.shots.length) this.shot = { id: item.shots[Math.min(this.wantShot, item.shots.length - 1)].id, mode: "pair", before: false };
+    this.wantShot = null;
+    // a screen taken again or dropped while it showed
+    if (this.shot && !item?.shots.some((s) => s.id === this.shot.id)) this.shot = null;
   }
 
   showItem(key, item) {
     const same = key && key === this.item?.key;
-    if (!same) { this.opened = new Set(); this.cursor = 0; this.target = null; this.picked = null; this.shot = null; }
+    if (!same) { this.opened = new Set(); this.cursor = 0; this.target = null; this.picked = null; this.shot = null; this.revealRail = true; }
     this.itemKey = key;
     this.item = item;
     if (!item) { this.show([]); return; }
@@ -292,10 +297,12 @@ export default class Review extends View {
     return this.list.findIndex((e) => e.kind === "file" && e.fi === fi);
   }
 
-  moveTo(i, cx, where = "center") {
+  // Going up, a line is brought in two rows below the top, where the file name kept above the diff does not hide it.
+  moveTo(i, cx, where = "center", up = false) {
     if (i < 0 || i >= this.list.length) return;
     this.cursor = i;
-    this.scroll.scroll_to_item(i, where);
+    const e = this.list[i];
+    this.scroll.scroll_to_item(up && e.kind !== "file" ? Math.max(this.headerOf(e.fi), i - 2) : i, where);
     cx.notify();
   }
 
@@ -347,9 +354,14 @@ export default class Review extends View {
     if (to >= 0) this.moveTo(this.headerOf(to), cx, "top");
   }
 
+  // The approved items show while asked for, or while one of them is shown.
+  historyShown() {
+    return this.history || Boolean(this.summary?.items.some((i) => i.approved && i.key === this.itemKey));
+  }
+
   // ] and [: the next and previous item of the rail.
   jumpItem(step, cx) {
-    const order = railOrder(this.summary?.items ?? [], this.history);
+    const order = railOrder(this.summary?.items ?? [], this.historyShown());
     const next = order[order.findIndex((i) => i.key === this.itemKey) + step];
     if (next) this.pickItem(next.key, cx);
   }
@@ -520,7 +532,7 @@ export default class Review extends View {
 
   setTab(tab, cx) {
     if (this.tab === tab) return;
-    this.tab = tab; this.target = null; this.picked = null; this.cursor = 0; this.opened = new Set();
+    this.tab = tab; this.target = null; this.picked = null; this.shot = null; this.cursor = 0; this.opened = new Set();
 
     this.reload(cx);
   }
@@ -542,14 +554,14 @@ export default class Review extends View {
       return;
     }
     if (!this.h.is_focused()) return;
-    if (this.shot && this.shotKey(k, cx)) return;
     const inbox = this.tab === "inbox" && this.item;
     const e0 = this.list[this.cursor];
     // brackets by the character typed, as AZERTY reaches them through AltGr
     if (inbox && (e.key_char === "]" || e.key_char === "[")) { this.jumpItem(e.key_char === "]" ? 1 : -1, cx); return; }
+    if (this.shot) { this.shotKey(k, cx); return; }
     switch (k) {
       case "j": case "down": this.moveTo(Math.min(this.cursor + 1, this.list.length - 1), cx, "top"); break;
-      case "k": case "up": this.moveTo(Math.max(this.cursor - 1, 0), cx, "top"); break;
+      case "k": case "up": this.moveTo(Math.max(this.cursor - 1, 0), cx, "top", true); break;
       case "shift-j": case "J": this.jumpFile(1, cx); break;
       case "shift-k": case "K": this.jumpFile(-1, cx); break;
       case "p": if (inbox) this.openShot(0, cx); break;
@@ -614,6 +626,8 @@ export default class Review extends View {
   // The rail: what is left to review, loose commits apart, the approved ones folded away.
   rail(t) {
     const { tickets, loose, done } = railGroups(this.summary?.items ?? []);
+    // an approved item shown (from Changes, or ] past the last one) unfolds the history, so its row and files show
+    const history = this.historyShown();
     const heading = (label, extra = null) => h_flex().px(12).pt(14).pb(6).items_center().gap(6)
       .child(div().flex_1().text_size(10.5).font_semibold().text_color(t.dim).child(label)).when(Boolean(extra), (e) => e.child(extra));
     const progress = (i) => {
@@ -645,10 +659,10 @@ export default class Review extends View {
       if (!shown) return [row(i)];
       const here = this.list[this.cursor]?.fi;
       return [row(i), v_flex().mx(6).pt(2).pb(6).children(this.files.map((f, fi) => {
-        const open = this.notes.filter((n) => n.state === "open" && n.path === f.path && (!n.repo || !f.repo || n.repo === f.repo)).length;
+        const open = this.list[this.headerOf(fi)]?.open ?? 0;
         return h_flex().id(`rail-file-${fi}`).h(22).pl(14).pr(8).gap(7).items_center().rounded(6).cursor_pointer().text_size(11.5)
           .when(here === fi, (e) => e.bg(t.hover)).hover((s) => s.bg(t.hover)).tooltip(f.repo ? `${f.repo} · ${f.path}` : f.path)
-          .on_click((_e, cx) => { this.h.focus(); this.moveTo(this.headerOf(fi), cx, "top"); })
+          .on_click((_e, cx) => { this.shot = null; this.h.focus(); this.moveTo(this.headerOf(fi), cx, "top"); })
           .child(div().size(12).flex_none().flex().items_center().justify_center().rounded(3).border_1().border_color(f.read ? t.ansi2 : t.border).when(f.read, (e) => e.bg(t.ansi2)).text_size(8.5).text_color(t.background).child(f.read ? "✓" : ""))
           .child(div().w(10).flex_none().text_size(10).font_semibold().text_color(statusColour(f, t)).child(STATUS[f.status] ?? "M"))
           .child(div().flex_1().min_w(0).truncate().text_color(f.read ? t.dim : here === fi ? t.foreground : t.muted).child(baseName(f.path)))
@@ -656,22 +670,33 @@ export default class Review extends View {
           .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`+${f.added} −${f.removed}`));
       }))];
     };
-    return v_flex().id("rail").w(320).flex_none().h_full().bg(t.chrome).border_r(1).border_color(t.border).overflow_y_scrollbar().pb(12).text_size(12.5)
-      .when(!this.summary, (e) => e.child(v_flex().p(14).gap(10).items_start().text_color(t.dim)
+    // One child per row, so the shown item's place is known and a newly shown one is scrolled into view
+    const kids = [];
+    const rows = (list) => { for (const i of list) { if (i.key === this.itemKey) this.railAt = kids.length; kids.push(v_flex().children(withFiles(i))); } };
+    this.railAt = -1;
+    if (!this.summary) {
+      kids.push(v_flex().p(14).gap(10).items_start().text_color(t.dim)
         .child(div().child(this.busy ?? (this.error ? "" : `No review inbox for ${this.root ? baseName(this.root) : "this repo"} yet: the commits a Claude makes here land in it.`)))
-        .when(!this.busy && Boolean(this.root) && !this.on, (e) => e.child(this.button("file-head", "File HEAD", (cx) => this.fileHead(cx), t, "File the last commit into the inbox, for one made by hand")))))
-      .when(Boolean(this.summary), (e) => e
-        .child(heading(`TO REVIEW · ${tickets.length}`))
-        .when(!tickets.length, (e) => e.child(div().px(14).text_color(t.dim).child("Nothing left to review")))
-        .children(tickets.flatMap(withFiles))
-        .when(loose.length > 0, (e) => e
-          .child(heading(`WITHOUT A TICKET · ${loose.length}`, this.button("file-loose", "File them", (cx) => this.askClaude("file", cx), t, "Ask the Claude to file them under their Tilid tickets", "ghost")))
-          .children(loose.flatMap(withFiles)))
-        .when(done.length > 0, (e) => e
-          .child(h_flex().id("history").mx(6).mt(10).px(8).h(28).items_center().gap(6).rounded(7).cursor_pointer().hover((s) => s.bg(t.hover)).text_size(11.5).text_color(t.dim)
-            .on_click((_e, cx) => { this.history = !this.history; cx.notify(); })
-            .child(this.history ? "▾" : "▸").child(`Approved · ${done.length}`))
-          .when(this.history, (e) => e.children(done.slice().reverse().flatMap(withFiles)))));
+        .when(!this.busy && Boolean(this.root) && !this.on, (e) => e.child(this.button("file-head", "File HEAD", (cx) => this.fileHead(cx), t, "File the last commit into the inbox, for one made by hand"))));
+    }
+    else {
+      kids.push(heading(`TO REVIEW · ${tickets.length}`));
+      if (!tickets.length) kids.push(div().px(14).text_color(t.dim).child("Nothing left to review"));
+      rows(tickets);
+      if (loose.length) {
+        kids.push(heading(`WITHOUT A TICKET · ${loose.length}`, this.button("file-loose", "File them", (cx) => this.askClaude("file", cx), t, "Ask the Claude to file them under their Tilid tickets", "ghost")));
+        rows(loose);
+      }
+      if (done.length) {
+        kids.push(h_flex().id("history").mx(6).mt(10).px(8).h(28).items_center().gap(6).rounded(7).cursor_pointer().hover((s) => s.bg(t.hover)).text_size(11.5).text_color(t.dim)
+          .on_click((_e, cx) => { this.history = !this.history; cx.notify(); })
+          .child(history ? "▾" : "▸").child(`Approved · ${done.length}`));
+        if (history) rows(done);
+      }
+    }
+    if (this.revealRail && this.railAt >= 0) { this.revealRail = false; this.railScroll.scroll_to_item(this.railAt); }
+    return v_flex().id("rail").w(320).flex_none().h_full().bg(t.chrome).border_r(1).border_color(t.border).overflow_y_scrollbar().track_scroll(this.railScroll).pb(12).text_size(12.5)
+      .children(kids);
   }
 
   // The item's head: its ticket, prose, commits to filter on, shots and actions.
@@ -707,7 +732,7 @@ export default class Review extends View {
         this.commit === c.sha, (cx) => this.pickCommit(c.sha, cx), `${c.subject}\n${c.author}, ${daysLabel([c.ts])}${c.copies.length ? `\nreplaces ${plural(c.copies.length, "rebased copy")}` : ""}`)))))
       .when(item.shots.length > 0, (e) => e.child(h_flex().id("shots").gap(10).pb(2).overflow_x_scrollbar()
         .children(item.shots.map((s, index) => {
-          const on = this.shot?.index === index;
+          const on = this.shot?.id === s.id;
           const badge = s.error ? ["failed", t.ansi1] : !s.before ? ["new", t.ansi2] : !s.after ? ["gone", t.ansi3] : null;
           const thumb = (file) => {
             const at = file && this.shots.get(file);
@@ -833,7 +858,7 @@ export default class Review extends View {
       .child(v_virtual_list(`diff-${this.tab}`, list.length, this.heights, String, (range) => { this.seeTop(range.start); return list.slice(range.start, range.end).map((e, k) => this.row(e, range.start + k, t)); })
         .size_full().track_scroll(this.scroll).on_item_click((key, cx) => this.click(key, cx)))
       .when(sticky >= 0, (e) => e.child(div().id("sticky-file").absolute().top_0().left_0().right(SCROLLBAR_W).border_b(1).border_color(t.border)
-        .on_click((_e, cx) => { this.h.focus(); this.moveTo(sticky, cx, "top"); }).child(this.row(list[sticky], sticky, t))))
+        .on_click((_e, cx) => this.click(String(sticky), cx)).child(this.row(list[sticky], sticky, t))))
       .child(Scrollbar.vertical(`diff-${this.tab}`).viewport_from_layout().absolute().inset_0());
   }
 
@@ -848,26 +873,33 @@ export default class Review extends View {
   openShot(index, cx) {
     const shots = this.item?.shots ?? [];
     if (!shots.length) { notify({ title: "Review", body: "No screens for this one yet: Screens asks the Claude for them", level: "info", timeout: 2500 }); return; }
-    this.shot = { index: Math.max(0, Math.min(index, shots.length - 1)), mode: this.shot?.mode ?? "pair", before: false };
+    this.shot = { id: shots[Math.max(0, Math.min(index, shots.length - 1))].id, mode: "pair", before: false };
     this.h.focus();
     cx.notify();
   }
 
-  // ←/→ go through the screens, b flips before and after (one at a time), m goes back and forth to side by side.
+  // The screen `step` away from the shown one, wrapping around.
+  stepShot(step) {
+    const shots = this.item?.shots ?? [];
+    if (!shots.length) return;
+    const at = shots.findIndex((s) => s.id === this.shot.id);
+    this.shot.id = shots[(at + step + shots.length) % shots.length].id;
+  }
+
+  // ←/→ go through the screens, b flips before and after (one at a time), m goes back and forth to side by side; the diff's keys wait until the diff is back.
   shotKey(k, cx) {
-    const shots = this.item?.shots ?? [], s = this.shot;
-    if (k === "left" || k === "h") s.index = (s.index - 1 + shots.length) % shots.length;
-    else if (k === "right" || k === "l") s.index = (s.index + 1) % shots.length;
+    const s = this.shot;
+    if (k === "left" || k === "h") this.stepShot(-1);
+    else if (k === "right" || k === "l") this.stepShot(1);
     else if (k === "b") { s.before = s.mode === "pair" ? true : !s.before; s.mode = "single"; }
     else if (k === "m") s.mode = s.mode === "pair" ? "single" : "pair";
-    else return false;
+    else return;
     cx.notify();
-    return true;
   }
 
   // The screens full size: before and after side by side, or one at a time; a screen only one side has (new, gone) shows that side alone.
   shotView(t) {
-    const shots = this.item?.shots ?? [], view = this.shot, shot = shots[view.index];
+    const shots = this.item?.shots ?? [], view = this.shot, index = shots.findIndex((s) => s.id === view.id), shot = shots[index];
     if (!shot) return div().flex_1();
     const both = Boolean(shot.before && shot.after), pair = both && view.mode === "pair";
     const before = both ? view.before : !shot.after;
@@ -881,17 +913,17 @@ export default class Review extends View {
     const pane = (side) => {
       const file = side === "before" ? shot.before : shot.after, at = file && this.shots.get(file);
       const label = side === "before" ? (shot.after ? "Before" : "Before · gone after") : (shot.before ? "After" : "After · new screen");
-      return v_flex().flex_1().min_w(0).h_full().gap(6).items_center()
+      // the caption sits on the picture, both centred in the room
+      return v_flex().flex_1().min_w(0).h_full().gap(6).items_center().justify_center()
         .child(h_flex().h(16).gap(6).items_center().text_size(11).font_semibold().text_color(side === "before" ? t.muted : t.foreground).child(label.toUpperCase()))
-        .child(div().flex_1().min_h(0).w_full().flex().items_center().justify_center()
-          .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(fitted(at, room.w - 2, room.h - 2))))
-          .when(!at, (e) => e.text_color(t.dim).child("No picture")));
+        .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(fitted(at, room.w - 2, room.h - 2))))
+        .when(!at, (e) => e.text_color(t.dim).child("No picture"));
     };
     return v_flex().flex_1().min_h(0).px(14).py(12).gap(10)
       .child(h_flex().gap(8).items_center().min_w(0)
-        .child(this.button("shot-prev", "←", set({ index: (view.index - 1 + shots.length) % shots.length }), t, "Previous screen (← or h)", "ghost"))
-        .child(div().flex_none().font_family(MONO()).text_size(11.5).text_color(t.dim).child(`${view.index + 1} / ${shots.length}`))
-        .child(this.button("shot-next", "→", set({ index: (view.index + 1) % shots.length }), t, "Next screen (→ or l)", "ghost"))
+        .child(this.button("shot-prev", "←", (cx) => { this.stepShot(-1); cx.notify(); }, t, "Previous screen (← or h)", "ghost"))
+        .child(div().flex_none().font_family(MONO()).text_size(11.5).text_color(t.dim).child(`${index + 1} / ${shots.length}`))
+        .child(this.button("shot-next", "→", (cx) => { this.stepShot(1); cx.notify(); }, t, "Next screen (→ or l)", "ghost"))
         .child(div().pl(4).flex_none().max_w(320).truncate().font_semibold().child(shot.label))
         .when(Boolean(shot.route), (e) => e.child(div().flex_1().min_w(0).truncate().font_family(MONO()).text_size(11.5).text_color(t.dim).child(shot.route)))
         .when(!shot.route, (e) => e.child(div().flex_1()))
