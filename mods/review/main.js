@@ -84,7 +84,7 @@ export default class Review extends View {
     this.families = new Map(); this.family = null; this.picksSeen = shared(PICKS);
     // Inbox
     this.project = null; this.summary = null; this.itemKey = null; this.commit = null; this.item = null;
-    this.watching = null; this.loading = false; this.again = false; this.pending = 0; this.history = false; this.shots = new Map(); this.shot = null; this.shotRoom = { w: 0, h: 0 };
+    this.watching = null; this.loading = false; this.again = false; this.pending = 0; this.edits = 0; this.history = false; this.shots = new Map(); this.shot = null; this.shotRoom = { w: 0, h: 0 };
     // Working
     this.seen = {}; this.now = null; this.base = "HEAD"; this.statusSeen = null; this.workFiles = [];
     // The diff shown
@@ -157,12 +157,13 @@ export default class Review extends View {
     }, cx);
   }
 
-  // Loads what the tab shows; a reload asked while one runs runs once it ends, and none runs while a write is on its way, so what was just changed on screen does not flick back.
+  // Loads what the tab shows; a reload asked while one runs runs once it ends, and none runs while a write is on its way, so what was just changed on screen does not flick back. One already running when a change lands is dropped, the change's own write reloading after it.
   reload(cx, quiet = false) {
     if (this.pending) return;
     if (this.loading) { this.again = true; return; }
     this.loading = true; this.error = null;
     if (!quiet) { this.busy = "Loading…"; cx.notify(); }
+    const edits = this.edits, stale = () => this.edits !== edits;
     cx.spawn(async (cx) => {
       try {
         const root = await this.locate();
@@ -170,7 +171,7 @@ export default class Review extends View {
         this.root = root;
         this.followRepo();
         if (this.tab === "working") await this.loadWorking();
-        else await this.loadInbox(cx);
+        else await this.loadInbox(cx, stale);
       } catch (e) { this.error = messageOf(e); }
       finally {
         this.busy = null; this.loading = false; cx.notify();
@@ -179,39 +180,45 @@ export default class Review extends View {
     });
   }
 
-  async loadInbox(cx) {
+  // Everything is fetched before anything is shown, so a load gone stale on the way leaves the screen as it is.
+  async loadInbox(cx, stale) {
     if (this.on) throw new Error("Review inboxes are read on this machine only");
     // commits made in a terminal or rewritten by a rebase, which the commit hook does not see
     await cli("sync", "--repo", this.root);
-    try { this.summary = await cli("inbox", "--repo", this.root); }
+    let summary;
+    try { summary = await cli("inbox", "--repo", this.root); }
     catch (e) {
       if (!messageOf(e).startsWith("no inbox")) throw e;
+      if (stale()) return;
       this.summary = null; this.project = null; this.item = null; this.show([]);
       return;
     }
-    const items = this.summary.items, project = this.summary.project;
-    if (project !== this.project) { this.project = project; this.watch(cx); }
+    const items = summary.items, project = summary.project;
     const wanted = this.wanted && items.find((i) => i.commits.some((c) => c.sha.startsWith(this.wanted)));
-    this.wanted = null;
     const key = wanted?.key ?? items.find((i) => i.key === this.itemKey || i.ticket && `#${i.ticket.number}` === this.itemKey)?.key ?? items.find((i) => !i.approved)?.key ?? null;
-    await this.loadItem(key);
+    const item = key ? await cli("show", project, key, ...(this.commit ? ["--commit", this.commit] : [])) : null;
+    if (stale()) return;
+    this.wanted = null;
+    this.summary = summary;
+    if (project !== this.project) { this.project = project; this.watch(cx); }
+    this.showItem(key, item);
+    await this.copyShots();
   }
 
-  async loadItem(key) {
+  showItem(key, item) {
     const same = key && key === this.item?.key;
     if (!same) { this.opened = new Set(); this.cursor = 0; this.target = null; this.picked = null; this.shot = null; }
     this.itemKey = key;
-    if (!key) { this.item = null; this.show([]); return; }
-    this.item = await cli("show", this.project, key, ...(this.commit ? ["--commit", this.commit] : []));
-    if (this.item.commit === null) this.commit = null;
-    this.show(this.item.files, this.item.notes.filter((n) => n.path));
+    this.item = item;
+    if (!item) { this.show([]); return; }
+    if (item.commit === null) this.commit = null;
+    this.show(item.files, item.notes.filter((n) => n.path));
     if (!same) this.scroll.scroll_to_item(0);
-    await this.copyShots();
   }
 
   // Shots are drawn from Herdr's own folder only, so each item's are copied under it once.
   async copyShots() {
-    const files = this.item.shots.flatMap((s) => [s.before, s.after]).filter((f) => f && !this.shots.has(f));
+    const files = (this.item?.shots ?? []).flatMap((s) => [s.before, s.after]).filter((f) => f && !this.shots.has(f));
     if (!files.length) return;
     const dir = `${SHOTS}/${this.project}`;
     await exec("mkdir", ["-p", `${appHome()}/${dir}`]);
@@ -254,7 +261,7 @@ export default class Review extends View {
 
   // Runs a CLI write, then shows the inbox as it now is.
   write(work, cx) {
-    this.pending++;
+    this.pending++; this.edits++;
     cx.spawn(async (cx) => {
       try { await work(); }
       catch (e) { fail(e); }
@@ -296,7 +303,7 @@ export default class Review extends View {
     if (this.tab !== "inbox" || !file || file.read === read) return;
     file.read = read;
     this.opened.delete(fi);
-    this.rebuild();
+    this.rebuild(); this.tally();
     cx.notify();
     const key = this.item.key;
     this.write(() => cli("read", this.project, key, `${file.repo}:${file.path}`, ...(read ? [] : ["--undo"])), cx);
@@ -315,9 +322,18 @@ export default class Review extends View {
 
   readAll(cx) {
     for (const f of this.files) f.read = true;
-    this.opened.clear(); this.rebuild(); cx.notify();
+    this.opened.clear(); this.rebuild(); this.tally(); cx.notify();
     const key = this.item.key;
     this.write(() => cli("read", this.project, key, "--all"), cx);
+  }
+
+  // The rail's row of the shown item follows a change made here at once, as the diff does; a single commit's files say nothing of the item's read count.
+  tally() {
+    const row = this.summary?.items.find((i) => i.key === this.item?.key);
+    if (!row) return;
+    if (!this.commit) row.read = this.files.filter((f) => f.read).length;
+    row.open = this.openCount();
+    row.approved = this.item.approved;
   }
 
   openCount() {
@@ -330,6 +346,7 @@ export default class Review extends View {
     if (!item) return;
     const undo = item.approved;
     const after = this.summary.items.slice(this.summary.items.findIndex((i) => i.key === item.key) + 1).find((i) => !i.approved);
+    item.approved = !undo; this.tally(); cx.notify();
     this.write(async () => {
       await cli("approve", this.project, item.key, ...(undo ? ["--undo"] : []));
       if (!undo && after) { this.itemKey = after.key; this.commit = null; }
@@ -392,7 +409,7 @@ export default class Review extends View {
   setState(state, cx) {
     const note = this.note();
     if (!note || note.state === state) return;
-    note.state = state; cx.notify();
+    note.state = state; this.tally(); cx.notify();
     this.write(() => cli("state", this.project, state, note.id), cx);
   }
 
@@ -400,6 +417,9 @@ export default class Review extends View {
     const note = this.note();
     if (!note) return;
     this.picked = null;
+    this.item.notes = this.item.notes.filter((n) => n !== note);
+    this.show(this.files, this.notes.filter((n) => n !== note));
+    this.tally(); cx.notify();
     this.write(() => cli("drop", this.project, note.id), cx);
   }
 
@@ -513,7 +533,8 @@ export default class Review extends View {
     switch (k) {
       case "j": case "down": this.moveTo(Math.min(this.cursor + 1, this.list.length - 1), cx, "top"); break;
       case "k": case "up": this.moveTo(Math.max(this.cursor - 1, 0), cx, "top"); break;
-      case "enter": if (e0) this.click(String(this.cursor), cx); break;
+      // pressX belongs to the last mouse press, not to this key
+      case "enter": if (e0) { this.pressX = null; this.click(String(this.cursor), cx); } break;
       case "c": this.compose(this.cursor, cx); break;
       case "r": if (inbox) this.readAndNext(cx); break;
       case "n": if (inbox) this.nextNote(cx); break;
