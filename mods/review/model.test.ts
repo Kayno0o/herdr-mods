@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, WRAP_H, wrapLine } from './model.js'
+import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -153,4 +153,28 @@ test('a long note is cut between words, a word wider than the card mid-word', ()
   expect(lines.every((line: string) => !line.startsWith(' ') && !line.endsWith(' '))).toBe(true)
   expect(lines.join(' ')).toBe(words)
   expect(noteLines('x'.repeat(230))).toHaveLength(3)
+})
+
+describe('fileJump', () => {
+  const list = [{ kind: 'file', fi: 0 }, { kind: 'pair', fi: 0 }, { kind: 'file', fi: 1 }, { kind: 'pair', fi: 1 }, { kind: 'file', fi: 2 }]
+
+  test('J goes to the next file, -1 past the last', () => {
+    expect(fileJump(list, 1, 1, 3)).toBe(1)
+    expect(fileJump(list, 4, 1, 3)).toBe(-1)
+  })
+
+  test('K from inside a file goes back to its own header first, then to the file before', () => {
+    expect(fileJump(list, 3, -1, 3)).toBe(1)
+    expect(fileJump(list, 2, -1, 3)).toBe(0)
+    expect(fileJump(list, 0, -1, 3)).toBe(-1)
+  })
+})
+
+describe('railOrder', () => {
+  const items = [{ key: 'old', approved: true }, { key: 'loose' }, { key: 't1', ticket: {} }, { key: 'new', approved: true }, { key: 't2', ticket: {} }]
+
+  test('tickets, then loose commits, the approved ones only while the history shows, newest first', () => {
+    expect(railOrder(items, false).map(i => i.key)).toEqual(['t1', 't2', 'loose'])
+    expect(railOrder(items, true).map(i => i.key)).toEqual(['t1', 't2', 'loose', 'new', 'old'])
+  })
 })

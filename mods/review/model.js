@@ -157,6 +157,23 @@ export function nextUnread(files, from) {
   return -1;
 }
 
+// The file J (step 1) or K (step -1) goes to from the list row `cursor`: the next or previous file, K first going back to the header of the file it is inside; -1 past either end.
+export function fileJump(list, cursor, step, count) {
+  const fi = list[cursor]?.fi ?? -1, header = list.findIndex((e) => e.kind === "file" && e.fi === fi);
+  const to = step < 0 && header >= 0 && cursor > header ? fi : fi + step;
+  return to >= 0 && to < count ? to : -1;
+}
+
+// The rail's items in its order: tickets, loose commits, then the approved ones, newest first, while shown.
+export function railGroups(items) {
+  return { tickets: items.filter((i) => i.ticket && !i.approved), loose: items.filter((i) => !i.ticket && !i.approved), done: items.filter((i) => i.approved) };
+}
+
+export function railOrder(items, history) {
+  const { tickets, loose, done } = railGroups(items);
+  return [...tickets, ...loose, ...history ? done.slice().reverse() : []];
+}
+
 // The list index of the next open note after `from`, wrapping around.
 export function nextOpenNote(list, from) {
   for (let k = 1; k <= list.length; k++) {
