@@ -193,7 +193,7 @@ export default class Review extends View {
     catch (e) {
       if (!messageOf(e).startsWith("no inbox")) throw e;
       if (stale()) return;
-      this.summary = null; this.project = null; this.item = null; this.show([]);
+      this.summary = null; this.project = null; this.item = null; this.wantShot = null; this.show([]);
       return;
     }
     const items = summary.items, project = summary.project;
@@ -206,6 +206,7 @@ export default class Review extends View {
     if (project !== this.project) { this.project = project; this.watch(cx); }
     this.showItem(key, item);
     await this.copyShots();
+    if (stale()) return;
     if (this.wantShot !== null && item?.shots.length) this.shot = { id: item.shots[Math.min(this.wantShot, item.shots.length - 1)].id, mode: "pair", before: false };
     this.wantShot = null;
     // a screen taken again or dropped while it showed
