@@ -1,5 +1,7 @@
 // What setup changes in a person's Herdr and Claude Code files, apart from the writing: each step answers the new content and what it did, so it can be shown and tested.
 
+import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+
 export type Keys = Record<string, Record<string, unknown>>
 
 export interface Merged<T> {
@@ -101,4 +103,13 @@ export function fillSkill(text: string, values: Record<string, string>): string 
 
     return values[name]!
   })
+}
+
+// Writes `content` as a regular file at `target`, replacing a symlink left by an older setup instead of writing through it; a file already holding it is left alone so Herdr reloads nothing for nothing.
+export function copyFile(target: string, content: Buffer): void {
+  if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink())
+    rmSync(target)
+
+  if (!existsSync(target) || !readFileSync(target).equals(content))
+    writeFileSync(target, content)
 }

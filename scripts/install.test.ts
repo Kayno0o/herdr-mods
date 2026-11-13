@@ -1,5 +1,8 @@
+import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { addCommitHook, fillSkill, mergeKeys, patchLayout, REVIEW_LISTENER } from './install'
+import { addCommitHook, copyFile, fillSkill, mergeKeys, patchLayout, REVIEW_LISTENER } from './install'
 
 describe('mergeKeys', () => {
   test('adds a missing key and keeps one the person bound to something else', () => {
@@ -57,4 +60,20 @@ describe('addCommitHook', () => {
 test('a skill gets this checkout\'s paths, and an unknown placeholder fails the install', () => {
   expect(fillSkill('run `{{CLI}} help` in {{REVIEWS}}', { CLI: 'bun /r/cli.ts', REVIEWS: '/data' })).toBe('run `bun /r/cli.ts help` in /data')
   expect(() => fillSkill('{{NOPE}}', {})).toThrow('no value for {{NOPE}}')
+})
+
+describe('copyFile', () => {
+  test('replaces a symlink with a regular file and leaves its target untouched', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'copy-'))
+    const source = join(dir, 'source.js')
+    const target = join(dir, 'main.js')
+
+    writeFileSync(source, 'old')
+    symlinkSync(source, target)
+    copyFile(target, Buffer.from('new'))
+
+    expect(lstatSync(target).isSymbolicLink()).toBe(false)
+    expect(readFileSync(target, 'utf8')).toBe('new')
+    expect(readFileSync(source, 'utf8')).toBe('old')
+  })
 })
