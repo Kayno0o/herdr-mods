@@ -8,7 +8,7 @@ import { addCommit, syncRepo } from './add'
 import { configFile, loadConfig, tilidAdvance } from './config'
 import { knownForges } from './forge'
 import { lineOf, renderView, textAt } from './format'
-import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, nextShotId, setNoteState } from './inbox'
+import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, nextShotId, readOrder, setNoteState } from './inbox'
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
@@ -32,6 +32,7 @@ const HELP = `review <command>: the per-project review inboxes (~/.local/share/h
   approve <project> <item> [--undo]
   advance <project> <ticket>                          move it from tilid.reviewStatus to tilid.afterReviewStatus in Tilid, as ${configFile()} names them
   prose <project> <item> <text...>                    what the item does, in a few sentences
+  order <project> <item> < lines                      the order to read its files in, one line each: <path> <why it changed>, or <path> mechanical
   file <project> <sha> <"#n - [SCREEN] title">... | none   file a commit under tickets
   brief <project> [<item>...]                         the open notes as a prompt for a Claude
   shot <project> <item> --label <l> [--route <r>] [--before <png>] [--after <png>]   file screenshots taken by hand
@@ -224,6 +225,16 @@ const commands: Record<string, () => void | Promise<void>> = {
     })
 
     print({ key }, `prose of ${key} written`)
+  },
+  async order() {
+    const [project, item] = need(2, '<project> <item> < "<path> <why>" lines')
+    const shown = view(inboxOf(project!), item!)
+    const order = readOrder(await Bun.stdin.text(), shown.files)
+
+    update(project!, (inbox) => {
+      (inbox.order ??= {})[shown.key] = order
+    })
+    print(order, `order of ${shown.key}: ${order.length} of ${shown.files.length} files, ${order.filter(o => o.mechanical).length} mechanical`)
   },
   file() {
     const [project, sha, ...lines] = need(3, '<project> <sha> <"#n - [SCREEN] title">... | none')

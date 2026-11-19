@@ -32,7 +32,7 @@ export function renderView(view: ItemView): string {
     let next = 0
     let inHunk = false
 
-    out.push('', `=== ${many ? `${file.repo}:` : ''}${file.path} (${file.status}${file.oldPath ? ` from ${file.oldPath}` : ''}, +${file.added} -${file.removed})${file.read ? ' read' : ''}`)
+    out.push('', `=== ${many ? `${file.repo}:` : ''}${file.path} (${file.status}${file.oldPath ? ` from ${file.oldPath}` : ''}, +${file.added} -${file.removed})${file.read ? ' read' : ''}${file.mechanical ? ' mechanical' : ''}${file.why ? `: ${file.why}` : ''}`)
 
     for (const note of notes.filter(n => n.line === null)) {
       out.push(noteLine(note))

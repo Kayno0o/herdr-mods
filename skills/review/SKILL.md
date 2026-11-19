@@ -32,6 +32,19 @@ review file <project> <sha> "#13859 - [USE_CASE] Ticket title"   # file a loose 
 
 Prose is in the user's language, markdown, backticks for identifiers. One to three sentences on the whole item, across its commits and repos: what was wrong or asked, what changes. Never restate the diff, the reader sees the lines. File a loose commit only under the ticket it really belongs to, its title copied from Tilid.
 
+Then the reading order, one line per file on stdin, written again in full whenever it changes:
+
+```bash
+review order <project> <item> <<'EOF'
+src/Controller/InvoiceController.php la route accepte le nouveau statut
+src/Service/InvoiceService.php la règle qui décide du statut
+tests/InvoiceServiceTest.php les trois cas du statut
+translations/messages.fr.yaml mechanical
+EOF
+```
+
+Order the files the way a reader follows the change: where it enters (a route, a page, a command), then the logic it reaches, then what it stores, then the tests. The words after a path say why that file changed, in a few words and the user's language, never what its lines say. `mechanical` marks a file nothing can go wrong in (a rename, i18n keys, formatting, a lockfile, generated code): the tab folds them into one group read in one go, so never mark a file holding logic. A path is `repo:path` when two repos hold it; a file left out comes after the listed ones.
+
 ## Notes
 
 ```bash

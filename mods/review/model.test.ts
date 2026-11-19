@@ -155,6 +155,26 @@ test('a long note is cut between words, a word wider than the card mid-word', ()
   expect(noteLines('x'.repeat(230))).toHaveLength(3)
 })
 
+describe('the mechanical group', () => {
+  const file = (path: string, mechanical = false, read = false) => ({ path, repo: 'r', patch: PATCH, read, binary: false, mechanical })
+  const files = [file('a.ts'), file('lock.json', true, true), file('fr.json', true)]
+
+  test('folds the mechanical files under one row counting them and those read, until it is opened', () => {
+    expect(buildList(files, []).map((e: Entry) => e.kind === 'file' ? `file ${e.fi}` : e.kind).filter((k: string) => k !== 'pair' && k !== 'hunk')).toEqual(['file 0', 'group'])
+    expect(buildList(files, []).at(-1)).toEqual({ kind: 'group', fi: 1, from: 1, to: 3, count: 2, read: 1, open: 0 })
+    expect(buildList(files, [], new Set(), true).filter((e: Entry) => e.kind === 'file').map((e: Entry) => e.fi)).toEqual([0, 1, 2])
+  })
+
+  test('J from the group goes into it when it is open, nowhere when it is folded', () => {
+    const folded = buildList(files, [])
+    const open = buildList(files, [], new Set(), true)
+
+    expect(fileJump(folded, folded.length - 1, 1, 3)).toBe(-1)
+    expect(fileJump(open, open.findIndex((e: Entry) => e.kind === 'group'), 1, 3)).toBe(1)
+    expect(fileJump(folded, folded.length - 1, -1, 3)).toBe(0)
+  })
+})
+
 describe('fileJump', () => {
   const list = [{ kind: 'file', fi: 0 }, { kind: 'pair', fi: 0 }, { kind: 'file', fi: 1 }, { kind: 'pair', fi: 1 }, { kind: 'file', fi: 2 }]
 

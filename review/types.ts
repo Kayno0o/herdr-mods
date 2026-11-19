@@ -60,6 +60,14 @@ export interface Shot {
   error?: string | null
 }
 
+// One file of an item's reading order: why it changed, or that its change is mechanical (a rename, i18n keys, formatting, a lockfile).
+export interface OrderEntry {
+  repo: string
+  path: string
+  why: string | null
+  mechanical: boolean
+}
+
 export interface Inbox {
   version: 1
   project: string
@@ -69,6 +77,8 @@ export interface Inbox {
   commits: Commit[]
   // the prose an agent wrote, per item
   prose: Record<string, string>
+  // the order an agent gave an item's files, per item; absent in inboxes written before it
+  order?: Record<string, OrderEntry[]>
   notes: Note[]
   // item to path to the digest of the file's diff when it was read: a later change to the file unreads it
   read: Record<string, Record<string, string>>

@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { tilidAdvance } from './config'
 import { commitPatch, netDiff } from './git'
-import { digest, fileKey, findCommit, findItem, itemsOf, itemTitle } from './inbox'
+import { digest, fileKey, findCommit, findItem, itemsOf, itemTitle, orderFiles } from './inbox'
 import { shotsDir } from './store'
 
 const DIFF_GIT = /^diff --git a\/.* b\/(.*)$/
@@ -146,6 +146,9 @@ export function summary(inbox: Inbox) {
 export interface FileView extends FileDiff {
   digest: string
   read: boolean
+  // from the item's reading order
+  why: string | null
+  mechanical: boolean
 }
 
 export interface ItemView {
@@ -190,7 +193,7 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
     exact,
     commit: only?.sha ?? null,
     commits: item.commits.map(({ sha, repo, ts, subject, author, copies, terminal }) => ({ sha, repo, ts, subject, author, copies, terminal })),
-    files: files.map((f) => {
+    files: orderFiles(files, inbox.order?.[item.key] ?? []).map((f) => {
       const key = fileKey(f.repo, f.path)
 
       return { ...f, digest: digest(f.patch), read: net.has(key) && read[key] === net.get(key) }

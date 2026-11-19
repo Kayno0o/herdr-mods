@@ -1,13 +1,14 @@
 // What the CLI does to an inbox, apart from git and the disk, so each step can be tested on plain objects.
-import type { Author, Commit, Inbox, Note, NoteState, Side, Ticket } from './types'
+import type { Author, Commit, Inbox, Note, NoteState, OrderEntry, Side, Ticket } from './types'
 import { createHash, randomBytes } from 'node:crypto'
 import { autosquashTarget, ticketKey, ticketLine } from './tickets'
 
 export const NOTE_STATES: NoteState[] = ['open', 'resolved', 'rejected']
 const NUMBER = /^\d+$/
+const ORDER_LINE = /^(\S+)\s+(\S.*)$/
 
 export function emptyInbox(project: string, tilid: Inbox['tilid'] = null): Inbox {
-  return { version: 1, project, tilid, repos: {}, commits: [], prose: {}, notes: [], read: {}, approved: {}, shots: [] }
+  return { version: 1, project, tilid, repos: {}, commits: [], prose: {}, order: {}, notes: [], read: {}, approved: {}, shots: [] }
 }
 
 export interface Item {
@@ -200,6 +201,43 @@ export function markRead(inbox: Inbox, item: string, files: { repo: string, path
 
   if (!Object.keys(read).length)
     delete inbox.read[item]
+}
+
+interface FileRef { repo: string, path: string }
+
+// An item's reading order from one line per file, `<path> <why it changed>` or `<path> mechanical`, a path being `repo:path` where it alone is ambiguous.
+export function readOrder(text: string, files: FileRef[]): OrderEntry[] {
+  const order: OrderEntry[] = []
+
+  for (const line of text.split('\n').map(l => l.trim()).filter(Boolean)) {
+    const [, path, why] = ORDER_LINE.exec(line) ?? [null, line, '']
+    const found = files.filter(f => f.path === path || fileKey(f.repo, f.path) === path)
+
+    if (!found.length)
+      throw new Error(`${path} is not in this item`)
+
+    if (found.length > 1)
+      throw new Error(`${path} names several files: ${found.map(f => fileKey(f.repo, f.path)).join(', ')}`)
+
+    const { repo, path: at } = found[0]!
+
+    if (!order.some(o => o.repo === repo && o.path === at))
+      order.push({ repo, path: at, why: why === 'mechanical' ? null : why!.trim() || null, mechanical: why === 'mechanical' })
+  }
+
+  return order
+}
+
+// The files in their reading order: the ones it lists, then those it leaves out as they came, then the mechanical ones.
+export function orderFiles<T extends FileRef>(files: T[], order: OrderEntry[]): (T & { why: string | null, mechanical: boolean })[] {
+  const at = new Map(order.map((o, i) => [fileKey(o.repo, o.path), { ...o, rank: i }]))
+  const rank = (f: T) => {
+    const o = at.get(fileKey(f.repo, f.path))
+
+    return o ? (o.mechanical ? 2 : 0) * files.length + o.rank : files.length + files.indexOf(f)
+  }
+
+  return files.toSorted((a, b) => rank(a) - rank(b)).map(f => ({ ...f, why: at.get(fileKey(f.repo, f.path))?.why ?? null, mechanical: at.get(fileKey(f.repo, f.path))?.mechanical ?? false }))
 }
 
 export function approve(inbox: Inbox, item: Item, undo = false) {

@@ -118,11 +118,18 @@ export function wrapLine(text, marks, cols) {
 // A file only added or only deleted shows in one column, its existing side.
 export const singleSide = (file) => file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
 
-// A whole item as the list draws it: each file's header, then, unless it is read and folded, its rows with their notes; every entry knows its file.
-export function buildList(files, notes, open = new Set()) {
+// A whole item as the list draws it: each file's header, then, unless it is read and folded, its rows with their notes; every entry knows its file. The mechanical files, last in a reading order, sit under one group row and show only once it is opened.
+export function buildList(files, notes, open = new Set(), groupOpen = false) {
   const list = [];
+  const notesOf = (file) => notes.filter((n) => n.path === file.path && (!n.repo || !file.repo || n.repo === file.repo));
+  const from = files.findIndex((f) => f.mechanical);
   files.forEach((file, fi) => {
-    const own = notes.filter((n) => n.path === file.path && (!n.repo || !file.repo || n.repo === file.repo));
+    const own = notesOf(file);
+    if (fi === from) {
+      const group = files.slice(from);
+      list.push({ kind: "group", fi, from, to: files.length, count: group.length, read: group.filter((f) => f.read).length, open: group.flatMap(notesOf).filter((n) => n.state === "open").length });
+    }
+    if (from >= 0 && fi >= from && !groupOpen) return;
     list.push({ kind: "file", fi, open: own.filter((n) => n.state === "open").length });
     if (file.read && !open.has(fi)) return;
     if (file.binary) { list.push({ kind: "meta", fi, text: "Binary file" }); return; }
@@ -140,7 +147,7 @@ const linesOf = (side, cols) => side ? Math.max(1, Math.ceil(side.text.length / 
 
 // An entry's height, a line too long for its column taking a further line per piece; `cols` comes from columnsOf, `files` tells which file is in one column.
 export function heightOf(entry, cols = columnsOf(0), files = []) {
-  if (entry.kind === "file") return FILE_H;
+  if (entry.kind === "file" || entry.kind === "group") return FILE_H;
   if (entry.kind === "hunk") return HUNK_H;
   if (entry.kind === "note") return noteHeight(entry.note);
   if (entry.kind !== "pair") return ROW_H;
@@ -158,9 +165,11 @@ export function nextUnread(files, from) {
   return -1;
 }
 
-// The file J (step 1) or K (step -1) goes to from the list row `cursor`: the next or previous file, K first going back to the header of the file it is inside; -1 past either end.
+// The file J (step 1) or K (step -1) goes to from the list row `cursor`: the next or previous file, K first going back to the header of the file it is inside; -1 past either end. From the mechanical group's row, J enters it only while it is open.
 export function fileJump(list, cursor, step, count) {
-  const fi = list[cursor]?.fi ?? -1, header = list.findIndex((e) => e.kind === "file" && e.fi === fi);
+  const e = list[cursor];
+  if (e?.kind === "group") return step < 0 ? (e.from > 0 ? e.from - 1 : -1) : list[cursor + 1]?.kind === "file" ? e.from : -1;
+  const fi = e?.fi ?? -1, header = list.findIndex((x) => x.kind === "file" && x.fi === fi);
   const to = step < 0 && header >= 0 && cursor > header ? fi : fi + step;
   return to >= 0 && to < count ? to : -1;
 }
@@ -241,7 +250,7 @@ export function claudeFor(commits, live, picked) {
 // What the Ask buttons hand a Claude; `cli` is how it runs the review CLI.
 export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,
-  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`.`,
+  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`,
   file: (cli, project, shas) => `File the loose commits ${shas.join(", ")} of the ${project} review inbox under their Tilid tickets: for each, find the ticket it belongs to in Tilid and run \`${cli} file ${project} <sha> "#<number> - [<USE_CASE>] <title>"\`. Leave a commit that belongs to no ticket alone.`,
   shots: (cli, project, item) => `Take before and after screenshots of the screens ${item.title} changes, following the review skill: write its scenario, then \`${cli} shoot ${project} ${item.key} --stack <dir>\` on a disposable stack, never mine, and look at every image it takes.`,
 };

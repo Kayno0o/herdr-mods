@@ -90,7 +90,7 @@ export default class Review extends View {
     // Working
     this.seen = {}; this.now = null; this.base = "HEAD"; this.statusSeen = null; this.workFiles = [];
     // The diff shown
-    this.files = []; this.notes = []; this.list = []; this.heights = []; this.opened = new Set(); this.cursor = 0;
+    this.files = []; this.notes = []; this.list = []; this.heights = []; this.opened = new Set(); this.groupOpen = false; this.cursor = 0;
     // top: the first row the list drew, whose file the diff names above it
     this.top = 0;
     // diffW: the diff's width; pressX: where the last press in it landed, since a list's click only names the row
@@ -217,7 +217,7 @@ export default class Review extends View {
 
   showItem(key, item) {
     const same = key && key === this.item?.key;
-    if (!same) { this.opened = new Set(); this.cursor = 0; this.target = null; this.picked = null; this.shot = null; this.revealRail = true; }
+    if (!same) { this.opened = new Set(); this.groupOpen = false; this.cursor = 0; this.target = null; this.picked = null; this.shot = null; this.revealRail = true; }
     this.itemKey = key;
     this.item = item;
     if (!item) { this.show([]); return; }
@@ -263,7 +263,7 @@ export default class Review extends View {
   }
 
   rebuild() {
-    this.list = buildList(this.files, this.notes, this.opened);
+    this.list = buildList(this.files, this.notes, this.opened, this.groupOpen);
     this.heights = this.list.map((e) => heightOf(e, this.cols, this.files));
     this.cursor = Math.min(this.cursor, Math.max(this.list.length - 1, 0));
     if (this.picked && !this.notes.some((n) => n.id === this.picked)) this.picked = null;
@@ -296,8 +296,26 @@ export default class Review extends View {
     return this.files[this.list[i]?.fi ?? -1] ?? null;
   }
 
+  // A mechanical file's header, or the group row while it is folded.
   headerOf(fi) {
-    return this.list.findIndex((e) => e.kind === "file" && e.fi === fi);
+    const at = this.list.findIndex((e) => e.kind === "file" && e.fi === fi);
+    return at >= 0 ? at : this.list.findIndex((e) => e.kind === "group" && fi >= e.from && fi < e.to);
+  }
+
+  toggleGroup(cx) {
+    this.groupOpen = !this.groupOpen;
+    this.rebuild();
+    this.moveTo(this.list.findIndex((e) => e.kind === "group"), cx, "top");
+  }
+
+  // r on the mechanical group: its files read at once, written in one go.
+  readGroup(e, cx) {
+    const files = this.files.slice(e.from, e.to).filter((f) => !f.read);
+    if (!files.length) return;
+    for (const f of files) { f.read = true; }
+    this.rebuild(); this.tally(); cx.notify();
+    const key = this.item.key;
+    this.write(() => cli("read", this.project, key, ...files.map((f) => `${f.repo}:${f.path}`)), cx);
   }
 
   // Going up, a line is brought in two rows below the top, where the file name kept above the diff does not hide it.
@@ -323,7 +341,9 @@ export default class Review extends View {
 
   // r: the file under the cursor is read, and the next one to read comes up; on a file already read, it is unread again.
   readAndNext(cx) {
-    const fi = this.list[this.cursor]?.fi ?? nextUnread(this.files, -1);
+    const at = this.list[this.cursor];
+    if (at?.kind === "group") { this.readGroup(at, cx); return; }
+    const fi = at?.fi ?? nextUnread(this.files, -1);
     if (fi < 0 || !this.files[fi]) return;
     if (this.files[fi].read) { this.toggleRead(fi, cx, false); return; }
     this.toggleRead(fi, cx, true);
@@ -388,7 +408,7 @@ export default class Review extends View {
   // Opens the composer on a row: a line on its new side (else its old one), or a whole file from its header.
   compose(i, cx, side = null) {
     const e = this.list[i], file = this.fileAt(i);
-    if (!e || !file) return;
+    if (!e || !file || e.kind === "group") return;
     if (e.kind === "note") { this.pickNote(e.note.id, cx); return; }
     let at = null;
     if (e.kind === "pair") {
@@ -535,7 +555,7 @@ export default class Review extends View {
 
   setTab(tab, cx) {
     if (this.tab === tab) return;
-    this.tab = tab; this.target = null; this.picked = null; this.shot = null; this.cursor = 0; this.opened = new Set();
+    this.tab = tab; this.target = null; this.picked = null; this.shot = null; this.cursor = 0; this.opened = new Set(); this.groupOpen = false;
 
     this.reload(cx);
   }
@@ -587,6 +607,12 @@ export default class Review extends View {
     const i = Number(key), e = this.list[i];
     if (!e) return;
     this.cursor = i;
+    if (e.kind === "group") {
+      this.h.focus();
+      if (this.pressX !== null && this.pressX >= this.diffW + SCROLLBAR_W - READ_BOX_W) this.readGroup(e, cx);
+      else this.toggleGroup(cx);
+      return;
+    }
     if (e.kind === "file") {
       const file = this.files[e.fi];
       const onBox = this.pressX !== null && this.pressX >= this.diffW + SCROLLBAR_W - READ_BOX_W;
@@ -667,16 +693,22 @@ export default class Review extends View {
       const shown = i.key === this.itemKey && this.item?.key === i.key && this.files.length > 0;
       if (!shown) return [row(i)];
       const here = this.list[this.cursor]?.fi;
-      return [row(i), v_flex().mx(8).pt(4).pb(8).children(this.files.map((f, fi) => {
-        const open = this.list[this.headerOf(fi)]?.open ?? 0;
-        return h_flex().id(`rail-file-${fi}`).h(28).pl(20).pr(12).gap(8).items_center().rounded(6).cursor_pointer().text_size(12)
+      const mechanical = this.files.findIndex((f) => f.mechanical);
+      return [row(i), v_flex().mx(8).pt(4).pb(8).children(this.files.flatMap((f, fi) => {
+        const open = this.list[this.headerOf(fi)]?.kind === "file" ? this.list[this.headerOf(fi)].open : 0;
+        const label = fi === mechanical ? [div().pl(20).pt(8).pb(2).text_size(11.5).text_color(t.dim).child("Mechanical")] : [];
+        return [...label, h_flex().id(`rail-file-${fi}`).h(28).pl(20).pr(12).gap(8).items_center().rounded(6).cursor_pointer().text_size(12)
           .when(here === fi, (e) => e.bg(t.hover)).hover((s) => s.bg(t.hover)).tooltip(f.repo ? `${f.repo} · ${f.path}` : f.path)
-          .on_click((_e, cx) => { this.shot = null; this.h.focus(); this.moveTo(this.headerOf(fi), cx, "top"); })
+          .on_click((_e, cx) => {
+            this.shot = null; this.h.focus();
+            if (f.mechanical && !this.groupOpen) { this.groupOpen = true; this.rebuild(); }
+            this.moveTo(this.headerOf(fi), cx, "top");
+          })
           .child(this.tick(f.read, 12, t))
           .child(div().w(10).flex_none().text_size(10).font_semibold().text_color(statusColour(f, t)).child(STATUS[f.status] ?? "M"))
           .child(div().flex_1().min_w(0).truncate().text_color(f.read ? t.dim : here === fi ? t.foreground : t.muted).child(baseName(f.path)))
           .when(open > 0, (e) => e.child(div().flex_none().px(4).rounded(4).bg(t.ansi3 + "26").text_color(t.ansi3).text_size(10.5).child(String(open))))
-          .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`+${f.added} −${f.removed}`));
+          .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`+${f.added} −${f.removed}`))];
       }))];
     };
     // One child per row, so the shown item's place is known and a newly shown one is scrolled into view
@@ -807,13 +839,25 @@ export default class Review extends View {
           .child(h_flex().flex_1().min_w(0).items_baseline().overflow_hidden().whitespace_nowrap()
             .when(this.tab === "inbox" && Object.keys(this.item?.repos ?? {}).length > 1, (x) => x.child(div().flex_none().text_color(t.dim).child(`${f.repo} · `)))
             .child(div().flex_none().text_color(t.dim).child(dir)).child(div().flex_none().font_semibold().text_color(f.read ? t.muted : t.foreground).child(baseName(f.path)))
-            .when(Boolean(f.oldPath) && f.oldPath !== f.path, (x) => x.child(div().pl(8).text_color(t.dim).truncate().child(`from ${f.oldPath}`))))
+            .when(Boolean(f.oldPath) && f.oldPath !== f.path, (x) => x.child(div().pl(8).text_color(t.dim).truncate().child(`from ${f.oldPath}`)))
+            .when(Boolean(f.why), (x) => x.child(div().pl(12).min_w(0).truncate().text_color(t.muted).tooltip(f.why).child(f.why))))
           .when(e.open > 0, (x) => x.child(div().flex_none().px(6).rounded(4).bg(t.ansi3 + "26").text_color(t.ansi3).text_size(11).child(`${e.open} open`)))
           .child(div().flex_none().text_size(11.5).text_color(t.ansi2).child(f.added ? `+${f.added}` : ""))
           .child(div().flex_none().text_size(11.5).text_color(t.ansi1).child(f.removed ? `−${f.removed}` : ""))
           .when(this.tab === "inbox", (x) => x.child(h_flex().flex_none().gap(5).items_center().pl(6).text_size(11.5).text_color(f.read ? t.ansi2 : t.dim)
             .child(this.tick(f.read, 14, t))
             .child("Read"))));
+    }
+    if (e.kind === "group") {
+      const all = e.read === e.count;
+      return wrap.bg(t.raised).border_t(1).border_color(t.border).text_size(13)
+        .child(h_flex().flex_1().min_w(0).pl(14).pr(14 + SCROLLBAR_W).gap(10).items_center()
+          .child(div().size(20).flex_none().flex().items_center().justify_center().text_color(t.muted).child(icon(this.groupOpen ? "chevron-down" : "chevron-right", 14)))
+          .child(div().font_semibold().text_color(all ? t.muted : t.foreground).child("Mechanical"))
+          .child(div().flex_1().text_color(t.dim).child(plural(e.count, "file")))
+          .when(e.open > 0, (x) => x.child(div().flex_none().px(6).rounded(4).bg(t.ansi3 + "26").text_color(t.ansi3).text_size(11).child(`${e.open} open`)))
+          .child(h_flex().flex_none().gap(5).items_center().pl(6).text_size(11.5).text_color(all ? t.ansi2 : t.dim)
+            .child(this.tick(all, 14, t)).child(`${e.read}/${e.count} read`)));
     }
     if (e.kind === "hunk") {
       return wrap.bg(t.chrome).text_color(t.dim).font_family(MONO()).text_size(11.5).child(div().pl(20).truncate().child(`@@ ${e.old} → ${e.next}${e.text ? `   ${e.text}` : ""}`));
@@ -849,7 +893,7 @@ export default class Review extends View {
     const list = this.list;
     if (this.shot) return this.shotView(t);
     // Inside a file whose header scrolled away, its header stays on top of the diff
-    const first = list[this.top], sticky = first && first.kind !== "file" ? this.headerOf(first.fi) : -1;
+    const first = list[this.top], sticky = first && first.kind !== "file" && first.kind !== "group" ? this.headerOf(first.fi) : -1;
     if (!list.length) {
       const empty = this.tab === "working" ? (this.base === "HEAD" ? "Nothing changed since HEAD" : "Nothing changed since you last looked") : !this.summary ? "" : this.item ? "Nothing in this commit" : "Nothing left to review";
       return div().flex_1().p(24).text_color(t.dim).child(this.busy ?? empty);

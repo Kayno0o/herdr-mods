@@ -1,6 +1,6 @@
 import type { Commit, Inbox } from './types'
 import { describe, expect, test } from 'bun:test'
-import { addNote, approve, brief, digest, emptyInbox, fileCommit, findItem, itemsOf, markRead, setNoteState } from './inbox'
+import { addNote, approve, brief, digest, emptyInbox, fileCommit, findItem, itemsOf, markRead, orderFiles, readOrder, setNoteState } from './inbox'
 import { parseTicket, ticketsIn } from './tickets'
 
 const ticket = (line: string) => parseTicket(line)!
@@ -106,5 +106,35 @@ describe('read', () => {
     expect(digest('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+c\n')).not.toBe(before)
     markRead(box, '#1', [{ repo: 'app', path: 'f', digest: before }], true)
     expect(box.read['#1']).toBeUndefined()
+  })
+})
+
+describe('reading order', () => {
+  const files = [{ repo: 'api', path: 'a.ts' }, { repo: 'api', path: 'b.ts' }, { repo: 'web', path: 'a.ts' }, { repo: 'web', path: 'lock.json' }]
+
+  test('reads one file a line, its path then why it changed, `mechanical` marking a mechanical one', () => {
+    expect(readOrder('web:a.ts  shows the new field\n\nb.ts the handler checks it first\nweb:lock.json mechanical\n', files)).toEqual([
+      { repo: 'web', path: 'a.ts', why: 'shows the new field', mechanical: false },
+      { repo: 'api', path: 'b.ts', why: 'the handler checks it first', mechanical: false },
+      { repo: 'web', path: 'lock.json', why: null, mechanical: true },
+    ])
+  })
+
+  test('refuses a path the item lacks or names twice, a file listed twice keeping one place', () => {
+    expect(() => readOrder('c.ts why', files)).toThrow('c.ts is not in this item')
+    expect(() => readOrder('a.ts why', files)).toThrow('a.ts names several files: api:a.ts, web:a.ts')
+    expect(readOrder('b.ts first\nb.ts again', files)).toHaveLength(1)
+  })
+
+  test('puts the files in its order, those it leaves out after them as they came, the mechanical ones last', () => {
+    const order = readOrder('web:lock.json mechanical\nweb:a.ts shows it\nb.ts checks it', files)
+
+    expect(orderFiles(files, order).map(f => [`${f.repo}:${f.path}`, f.why, f.mechanical])).toEqual([
+      ['web:a.ts', 'shows it', false],
+      ['api:b.ts', 'checks it', false],
+      ['api:a.ts', null, false],
+      ['web:lock.json', null, true],
+    ])
+    expect(orderFiles(files, []).map(f => f.path)).toEqual(['a.ts', 'b.ts', 'a.ts', 'lock.json'])
   })
 })

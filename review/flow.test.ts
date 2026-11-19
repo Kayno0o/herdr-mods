@@ -116,3 +116,25 @@ test('sync files the branch\'s unpushed commits the inbox lacks, once', () => {
   }
   finally { other.cleanup() }
 })
+
+test('the order command puts an item\'s files in the order given, in its net diff and in one commit\'s view', () => {
+  const other = makeRepo('ordered')
+
+  try {
+    other.commit('chore: base', { 'a.ts': '1\n', 'b.ts': '1\n', 'c.json': '1\n' })
+    const first = other.commit('feat: one\n\n#7 - [SCREEN] Seven', { 'a.ts': '2\n', 'b.ts': '2\n', 'c.json': '2\n' })
+    const second = other.commit('feat: two\n\n#7 - [SCREEN] Seven', { 'a.ts': '3\n', 'c.json': '3\n' })
+
+    addCommit(other.dir, first)
+    addCommit(other.dir, second)
+    const r = Bun.spawnSync(['bun', join(import.meta.dir, 'cli.ts'), 'order', 'ordered', '7'], { stdin: Buffer.from('c.json mechanical\nb.ts the handler first\n'), stdout: 'pipe', stderr: 'pipe', env: process.env })
+
+    expect(r.stderr.toString()).toBe('')
+    const inbox = load('ordered')!
+
+    expect(view(inbox, '7').files.map(f => [f.path, f.why, f.mechanical])).toEqual([['b.ts', 'the handler first', false], ['a.ts', null, false], ['c.json', null, true]])
+    expect(view(inbox, '7', second).files.map(f => f.path)).toEqual(['a.ts', 'c.json'])
+    expect(renderView(view(inbox, '7'))).toContain('=== b.ts (modified, +1 -1): the handler first')
+  }
+  finally { other.cleanup() }
+})
