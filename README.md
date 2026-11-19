@@ -59,3 +59,7 @@ Everything specific to you lives in `~/.config/herdr-mods` (or `$HERDR_MODS_CONF
 - a preset per project in `~/.config/herdr-mods/presets/<project>.ts`, modelled on [shoot/example-preset.ts](shoot/example-preset.ts);
 - the login accounts the presets read, in `~/.config/herdr-mods/.env`;
 - a throwaway stack, never the one you work in: `shoot` runs migrations and never rolls them back. `wt` (`@kaynooo/cli-wt`) makes one per task; without it, pass the stack's folder and URL with `--stack <dir> --url <url>`.
+
+## Credits
+
+The icons are [Lucide](https://lucide.dev)'s, under the ISC licence.

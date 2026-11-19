@@ -2,7 +2,7 @@
 // The layout's copy only listens for review.open and review.request (Changes' ask, its props in shared REQUEST); the view is a tab whose only pane is this mod, reused while the space has one.
 // Keys, while the tab has the keyboard: r read and next (unread again on a read file), n next open note, c comment, a approve, s send the notes, j/k move, J/K next and previous file, ] and [ next and previous item, p the screens, enter open, v/x/d resolve, reject, delete the picked note; in the screens, ←/→ (h/l) move, b flips before and after, m side by side.
 
-import { View, div, image } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
 import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder } from "./model.js";
@@ -20,6 +20,8 @@ const SCROLLBAR_W = 10;
 const READ_BOX_W = 96;
 const MONO = () => settings().font_family ?? "JetBrains Mono";
 const STATUS = { added: "A", deleted: "D", renamed: "R", modified: "M" };
+// Lucide icons, tinted by the text colour around them
+const icon = (name, size) => svg(`mods/review/${name}.svg`).size(size).flex_none();
 
 const lastLine = (text) => text.trim().split("\n").filter(Boolean).at(-1) ?? "";
 const messageOf = (e) => e instanceof Error ? e.message : String(e);
@@ -620,6 +622,12 @@ export default class Review extends View {
     }));
   }
 
+  // A read box: an empty frame, or filled green with a check.
+  tick(on, size, t) {
+    return div().size(size).flex_none().flex().items_center().justify_center().rounded(size > 12 ? 4 : 3).border_1().border_color(on ? t.ansi2 : t.border)
+      .when(on, (e) => e.bg(t.ansi2).text_color(t.background).child(icon("check", size - 4)));
+  }
+
   hint(key, t) {
     return div().px(5).h(16).flex().items_center().rounded(4).border_1().border_color(t.border).text_size(10.5).text_color(t.muted).font_family(MONO()).child(key);
   }
@@ -629,8 +637,8 @@ export default class Review extends View {
     const { tickets, loose, done } = railGroups(this.summary?.items ?? []);
     // an approved item shown (from Changes, or ] past the last one) unfolds the history, so its row and files show
     const history = this.historyShown();
-    const heading = (label, extra = null) => h_flex().px(12).pt(14).pb(6).items_center().gap(6)
-      .child(div().flex_1().text_size(10.5).font_semibold().text_color(t.dim).child(label)).when(Boolean(extra), (e) => e.child(extra));
+    const heading = (label, count, extra = null) => h_flex().px(14).pt(14).pb(6).items_center().gap(6).text_size(11.5)
+      .child(div().font_semibold().text_color(t.muted).child(label)).child(div().flex_1().text_color(t.dim).child(String(count))).when(Boolean(extra), (e) => e.child(extra));
     const progress = (i) => {
       const ready = i.read === i.files && !i.open;
       return h_flex().gap(6).items_center().text_size(11).text_color(t.dim)
@@ -652,7 +660,7 @@ export default class Review extends View {
           .when(i.ticket && i.ticket.screen, (e) => e.child(div().min_w(0).truncate().child(i.ticket.screen)))
           .child(div().flex_1())
           .when(!i.approved, (e) => e.child(progress(i)))
-          .when(i.approved, (e) => e.child(div().text_color(t.ansi2).child("✓"))));
+          .when(i.approved, (e) => e.child(div().text_color(t.ansi2).child(icon("check", 13)))));
     };
     // The shown item lists its files under its row, each a jump to its place in the diff.
     const withFiles = (i) => {
@@ -664,7 +672,7 @@ export default class Review extends View {
         return h_flex().id(`rail-file-${fi}`).h(22).pl(14).pr(8).gap(7).items_center().rounded(6).cursor_pointer().text_size(11.5)
           .when(here === fi, (e) => e.bg(t.hover)).hover((s) => s.bg(t.hover)).tooltip(f.repo ? `${f.repo} · ${f.path}` : f.path)
           .on_click((_e, cx) => { this.shot = null; this.h.focus(); this.moveTo(this.headerOf(fi), cx, "top"); })
-          .child(div().size(12).flex_none().flex().items_center().justify_center().rounded(3).border_1().border_color(f.read ? t.ansi2 : t.border).when(f.read, (e) => e.bg(t.ansi2)).text_size(8.5).text_color(t.background).child(f.read ? "✓" : ""))
+          .child(this.tick(f.read, 12, t))
           .child(div().w(10).flex_none().text_size(10).font_semibold().text_color(statusColour(f, t)).child(STATUS[f.status] ?? "M"))
           .child(div().flex_1().min_w(0).truncate().text_color(f.read ? t.dim : here === fi ? t.foreground : t.muted).child(baseName(f.path)))
           .when(open > 0, (e) => e.child(div().flex_none().px(4).rounded(4).bg(t.ansi3 + "26").text_color(t.ansi3).text_size(10.5).child(String(open))))
@@ -681,22 +689,22 @@ export default class Review extends View {
         .when(!this.busy && Boolean(this.root) && !this.on, (e) => e.child(this.button("file-head", "File HEAD", (cx) => this.fileHead(cx), t, "File the last commit into the inbox, for one made by hand"))));
     }
     else {
-      kids.push(heading(`TO REVIEW · ${tickets.length}`));
+      kids.push(heading("To review", tickets.length));
       if (!tickets.length) kids.push(div().px(14).text_color(t.dim).child("Nothing left to review"));
       rows(tickets);
       if (loose.length) {
-        kids.push(heading(`WITHOUT A TICKET · ${loose.length}`, this.button("file-loose", "File them", (cx) => this.askClaude("file", cx), t, "Ask the Claude to file them under their Tilid tickets", "ghost")));
+        kids.push(heading("Without a ticket", loose.length, this.button("file-loose", "File them", (cx) => this.askClaude("file", cx), t, "Ask the Claude to file them under their Tilid tickets", "ghost")));
         rows(loose);
       }
       if (done.length) {
         kids.push(h_flex().id("history").mx(6).mt(10).px(8).h(28).items_center().gap(6).rounded(7).cursor_pointer().hover((s) => s.bg(t.hover)).text_size(11.5).text_color(t.dim)
           .on_click((_e, cx) => { this.history = !this.history; cx.notify(); })
-          .child(history ? "▾" : "▸").child(`Approved · ${done.length}`));
+          .child(icon(history ? "chevron-down" : "chevron-right", 13)).child("Approved").child(div().text_color(t.dim).child(String(done.length))));
         if (history) rows(done);
       }
     }
     if (this.revealRail && this.railAt >= 0) { this.revealRail = false; this.railScroll.scroll_to_item(this.railAt); }
-    return v_flex().id("rail").w(320).flex_none().h_full().bg(t.chrome).border_r(1).border_color(t.border).overflow_y_scrollbar().track_scroll(this.railScroll).pb(12).text_size(12.5)
+    return v_flex().id("rail").w(360).flex_none().h_full().bg(t.chrome).border_r(1).border_color(t.border).overflow_y_scrollbar().track_scroll(this.railScroll).pb(12).text_size(12.5)
       .children(kids);
   }
 
@@ -713,14 +721,13 @@ export default class Review extends View {
     return v_flex().flex_none().px(18).pt(14).pb(10).gap(10).border_b(1).border_color(t.border)
       .child(h_flex().gap(10).items_center().min_w(0)
         .child(div().flex_none().font_family(MONO()).text_size(15).text_color(item.approved ? t.ansi2 : t.accent).child(ticket ? `#${ticket.number}` : short(item.key)))
-        .child(div().flex_1().min_w(0).truncate().text_size(15).font_semibold().child(ticket ? ticket.title : item.commits[0]?.subject ?? ""))
+        .child(div().min_w(0).truncate().text_size(15).font_semibold().child(ticket ? ticket.title : item.commits[0]?.subject ?? ""))
         .when(Boolean(ticket?.screen), (e) => e.child(div().flex_none().px(7).h(20).flex().items_center().rounded(5).bg(t.raised).font_family(MONO()).text_size(10.5).text_color(t.muted).child(ticket.screen)))
-        .when(Boolean(tilid), (e) => e.child(this.button("tilid", "Tilid ↗", (cx) => cx.open_url(tilid), t, "Open the ticket in Tilid", "ghost"))))
-      .child(item.prose
-        // a long description scrolls rather than pushing the diff down
-        ? div().id("prose").max_h(76).overflow_y_scrollbar().text_size(12.5).text_color(t.muted).child(item.prose)
-        : h_flex().gap(8).items_center().text_size(12).text_color(t.dim).child("No description yet").child(this.button("describe", "Describe", (cx) => this.askClaude("describe", cx), t, "Ask the Claude to describe what it changes and why", "ghost")))
-      .children(loose.map((n) => h_flex().id(`item-note-${n.id}`).gap(8).px(10).py(6).rounded(7).cursor_pointer().bg(this.noteColour(n, t) + "14").border_l_2().border_color(this.noteColour(n, t))
+        .child(div().flex_1())
+        .when(Boolean(tilid), (e) => e.child(this.button("tilid", h_flex().gap(4).items_center().child("Tilid").child(icon("arrow-up-right", 12)), (cx) => cx.open_url(tilid), t, "Open the ticket in Tilid", "ghost"))))
+      // a long description scrolls rather than pushing the diff down
+      .when(Boolean(item.prose), (e) => e.child(div().id("prose").max_h(76).overflow_y_scrollbar().text_size(12.5).text_color(t.muted).child(item.prose)))
+      .children(loose.map((n) => h_flex().id(`item-note-${n.id}`).gap(8).px(10).py(6).rounded(7).cursor_pointer().bg(this.noteColour(n, t) + "14").border_1().border_color(this.noteColour(n, t) + "47")
         .on_click((_e, cx) => this.pickNote(n.id, cx))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(`${n.author} · ${n.state}`))
         .child(div().flex_1().min_w(0).truncate().text_size(12).child(n.body.split("\n")[0]))))
@@ -729,7 +736,7 @@ export default class Review extends View {
         .children(item.commits.map((c) => chip(`commit-${c.sha}`, h_flex().gap(6).min_w(0)
           .child(div().flex_none().font_family(MONO()).text_size(11).text_color(t.accent).child(c.sha.slice(0, 7)))
           .child(div().min_w(0).truncate().child(c.subject))
-          .when(c.copies.length > 0, (e) => e.child(div().flex_none().text_color(t.dim).child(`↻${c.copies.length}`))),
+          .when(c.copies.length > 0, (e) => e.child(h_flex().flex_none().gap(3).items_center().text_color(t.dim).child(icon("copy", 11)).child(String(c.copies.length)))),
         this.commit === c.sha, (cx) => this.pickCommit(c.sha, cx), `${c.subject}\n${c.author}, ${daysLabel([c.ts])}${c.copies.length ? `\nreplaces ${plural(c.copies.length, "rebased copy")}` : ""}`)))))
       .when(item.shots.length > 0, (e) => e.child(h_flex().id("shots").gap(10).pb(2).overflow_x_scrollbar()
         .children(item.shots.map((s, index) => {
@@ -744,7 +751,7 @@ export default class Review extends View {
             .bg(on ? t.accent + "14" : t.chrome).hover((x) => x.bg(t.hover))
             .on_click((_e, cx) => this.openShot(index, cx))
             .tooltip(s.error ? `${s.label}\nfailed: ${s.error}` : `${s.label}${s.route ? `\n${s.route}` : ""}`)
-            .child(h_flex().gap(4).items_center().child(thumb(s.before)).child(div().text_size(10).text_color(t.dim).child("→")).child(thumb(s.after)))
+            .child(h_flex().gap(4).items_center().child(thumb(s.before)).child(div().text_color(t.dim).child(icon("arrow-right", 11))).child(thumb(s.after)))
             .child(h_flex().w(184).gap(6).items_center()
               .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(s.label))
               .when(Boolean(badge), (x) => x.child(div().flex_none().px(5).rounded(4).bg(badge[1] + "26").text_color(badge[1]).text_size(10.5).child(badge[0]))));
@@ -754,14 +761,15 @@ export default class Review extends View {
         .when(Boolean(item.advance) && !item.approved, (e) => e.child(this.button("approve-tilid", "Approve and move in Tilid", (cx) => this.approve(cx, true), t, `Approve, and move the ticket from "${item.advance.from}" to "${item.advance.to}"`)))
         .when(read < files.length, (e) => e.child(this.button("read-all", "Read all", (cx) => this.readAll(cx), t, "Mark every file read")))
         .when(open > 0, (e) => e.child(this.button("send", `Send ${plural(open, "note")}`, (cx) => this.sendNotes(cx), t, "Paste the open notes into the Claude that made these commits (s)")))
-        .child(div().w(8))
-        .child(this.button("ask-review", "Review", (cx) => this.askClaude("review", cx), t, "Ask the Claude to read it and note what is wrong, risky or unclear", "ghost"))
-        .child(this.button("ask-shots", "Screens", (cx) => this.askClaude("shots", cx), t, "Ask the Claude for before and after screenshots of the screens it changes", "ghost"))
+        .child(div().pl(14).pr(2).text_size(11.5).text_color(t.muted).child("Ask Claude"))
+        .when(!item.prose, (e) => e.child(this.button("describe", "Describe", (cx) => this.askClaude("describe", cx), t, "Ask the Claude to describe what it changes and why")))
+        .child(this.button("ask-review", "Review", (cx) => this.askClaude("review", cx), t, "Ask the Claude to read it and note what is wrong, risky or unclear"))
+        .child(this.button("ask-shots", "Screens", (cx) => this.askClaude("shots", cx), t, "Ask the Claude for before and after screenshots of the screens it changes"))
         .child(div().flex_1())
         .child(h_flex().gap(8).text_size(11.5).text_color(t.dim)
           .child(div().text_color(t.ansi2).child(`+${added}`)).child(div().text_color(t.ansi1).child(`−${removed}`))
           .child(div().child(`${read}/${plural(files.length, "file")} read`))))
-      .when(!item.exact, (e) => e.child(div().text_size(11.5).text_color(t.ansi3).child("Its commits do not apply one onto the other: shown is the touched files from before the first to after the last.")));
+      .when(!item.exact, (e) => e.child(div().text_size(11.5).text_color(t.ansi3).child("These commits do not apply one after the other, so each file shows as it was before the first and after the last.")));
   }
 
   noteColour(n, t) {
@@ -804,8 +812,8 @@ export default class Review extends View {
           .child(div().flex_none().text_size(11.5).text_color(t.ansi2).child(f.added ? `+${f.added}` : ""))
           .child(div().flex_none().text_size(11.5).text_color(t.ansi1).child(f.removed ? `−${f.removed}` : ""))
           .when(this.tab === "inbox", (x) => x.child(h_flex().flex_none().gap(5).items_center().pl(6).text_size(11.5).text_color(f.read ? t.ansi2 : t.dim)
-            .child(div().size(14).flex().items_center().justify_center().rounded(4).border_1().border_color(f.read ? t.ansi2 : t.border).when(f.read, (y) => y.bg(t.ansi2)).text_size(10).text_color(t.background).child(f.read ? "✓" : ""))
-            .child(f.read && this.opened.has(e.fi) ? "Read, open" : "Read"))));
+            .child(this.tick(f.read, 14, t))
+            .child("Read"))));
     }
     if (e.kind === "hunk") {
       return wrap.bg(t.chrome).text_color(t.dim).font_family(MONO()).text_size(11.5).child(div().pl(16).truncate().child(`@@ ${e.old} → ${e.next}${e.text ? `   ${e.text}` : ""}`));
@@ -813,7 +821,7 @@ export default class Review extends View {
     if (e.kind === "meta") return wrap.text_color(t.dim).child(div().pl(16).child(e.text));
     if (e.kind === "note") {
       const n = e.note, colour = this.noteColour(n, t), lines = noteLines(n.body);
-      const card = v_flex().flex_1().min_w(0).h_full().my(4).mr(12).px(10).py(5).gap(1).rounded(7).border_l_2().border_color(colour).bg(picked ? t.selected : colour + "14")
+      const card = v_flex().flex_1().min_w(0).h_full().my(4).mr(12).px(10).py(4).gap(1).rounded(7).border_1().border_color(picked ? colour : colour + "47").bg(picked ? t.selected : colour + "14")
         .text_size(12)
         .child(h_flex().gap(8).items_center().h(18).text_size(11).text_color(t.dim)
           .child(div().text_color(n.author === "me" ? t.accent : t.ansi5).child(n.author === "me" ? "you" : "claude"))
@@ -916,15 +924,15 @@ export default class Review extends View {
       const label = side === "before" ? (shot.after ? "Before" : "Before · gone after") : (shot.before ? "After" : "After · new screen");
       // the caption sits on the picture, both centred in the room
       return v_flex().flex_1().min_w(0).h_full().gap(6).items_center().justify_center()
-        .child(h_flex().h(16).gap(6).items_center().text_size(11).font_semibold().text_color(side === "before" ? t.muted : t.foreground).child(label.toUpperCase()))
+        .child(h_flex().h(16).gap(6).items_center().text_size(11).font_semibold().text_color(side === "before" ? t.muted : t.foreground).child(label))
         .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(fitted(at, room.w - 2, room.h - 2))))
         .when(!at, (e) => e.text_color(t.dim).child("No picture"));
     };
     return v_flex().flex_1().min_h(0).px(14).py(12).gap(10)
       .child(h_flex().gap(8).items_center().min_w(0)
-        .child(this.button("shot-prev", "←", (cx) => { this.stepShot(-1); cx.notify(); }, t, "Previous screen (← or h)", "ghost"))
+        .child(this.button("shot-prev", icon("chevron-left", 14), (cx) => { this.stepShot(-1); cx.notify(); }, t, "Previous screen (← or h)", "ghost"))
         .child(div().flex_none().font_family(MONO()).text_size(11.5).text_color(t.dim).child(`${index + 1} / ${shots.length}`))
-        .child(this.button("shot-next", "→", (cx) => { this.stepShot(1); cx.notify(); }, t, "Next screen (→ or l)", "ghost"))
+        .child(this.button("shot-next", icon("chevron-right", 14), (cx) => { this.stepShot(1); cx.notify(); }, t, "Next screen (→ or l)", "ghost"))
         .child(div().pl(4).flex_none().max_w(320).truncate().font_semibold().child(shot.label))
         .when(Boolean(shot.route), (e) => e.child(div().flex_1().min_w(0).truncate().font_family(MONO()).text_size(11.5).text_color(t.dim).child(shot.route)))
         .when(!shot.route, (e) => e.child(div().flex_1()))
