@@ -4,17 +4,18 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/;
 const GIT_HEADER = /^diff --git a\/.* b\/(.*)$/;
 const TAB = /\t/g;
 
-export const ROW_H = 20;
+export const ROW_H = 22;
 // each further line of a line too long for its column
-export const WRAP_H = 17;
-export const CODE_SIZE = 11.5;
+export const WRAP_H = 18;
+export const CODE_SIZE = 12;
 // the monospace font's advance is 0.6 of its size
 const CHAR_W = CODE_SIZE * 0.6;
 // the cursor bar, the line number and the +/- sign before a line's text, then a margin after it
 const GUTTER = 3 + 46 + 12 + 8;
-export const FILE_H = 34;
-export const HUNK_H = 24;
-const NOTE_HEAD_H = 36;
+export const FILE_H = 40;
+export const HUNK_H = 28;
+// a note card's margins, padding, border and author line
+const NOTE_HEAD_H = 46;
 const NOTE_LINE_H = 18;
 const NOTE_LINES = 4;
 const NOTE_COLUMNS = 110;
