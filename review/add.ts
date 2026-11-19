@@ -1,6 +1,6 @@
 import type { Commit, Ticket } from './types'
 import { commitInfo, git, orphaned, patchId } from './git'
-import { fileCommit } from './inbox'
+import { FEATURE_BRANCH, fileCommit } from './inbox'
 import { createFor, load, locate, update } from './store'
 import { autosquashTarget, ticketsIn } from './tickets'
 
@@ -9,6 +9,16 @@ const SYNC_DAYS = 14
 const SYNC_MAX = 200
 const FIELD = '\x1F'
 const RECORD = '\x1E'
+
+// The branch checked out in `path`, null when detached.
+const currentBranch = (path: string) => git(path, ['symbolic-ref', '--short', '-q', 'HEAD'], { ok: [0, 1] }).trim() || null
+
+// The branch an older commit was made on, as far as the branches holding it tell: a feature branch first, else the one checked out.
+function branchOf(path: string, sha: string, current: string | null): string | null {
+  const holding = git(path, ['branch', '--contains', sha, '--format=%(refname:short)'], { ok: [0, 129] }).split('\n').filter(Boolean)
+
+  return holding.find(b => FEATURE_BRANCH.test(b)) ?? (current && holding.includes(current) ? current : holding[0] ?? null)
+}
 
 // A `fixup!` commit names no ticket itself: it takes the tickets of the commit it fixes, looked up in the inbox, else in the history before it.
 function autosquashTickets(path: string, sha: string, target: string, held: Commit[]): Ticket[] {
@@ -52,6 +62,7 @@ export function addCommit(dir: string, rev = 'HEAD', terminal: string | null = n
       patchId: id,
       copies: [],
       terminal,
+      branch: currentBranch(at.path),
     }
 
     inbox.repos[at.repo] = at.path
@@ -71,5 +82,29 @@ export function syncRepo(dir: string): Added[] {
   // 128: a branch with no commit yet
   const listed = git(dir, ['rev-list', '--reverse', '--no-merges', `--max-count=${SYNC_MAX}`, `--since=${SYNC_DAYS}.days`, 'HEAD', '--not', '--remotes'], { ok: [0, 128] })
 
-  return listed.split('\n').filter(sha => sha && !held.has(sha)).map(sha => addCommit(dir, sha))
+  const added = listed.split('\n').filter(sha => sha && !held.has(sha)).map(sha => addCommit(dir, sha))
+
+  backfillBranches(dir)
+
+  return added
+}
+
+// Commits filed before the inbox kept branches get theirs once, the last two weeks' only.
+function backfillBranches(dir: string) {
+  const at = locate(dir)
+  const since = Date.now() / 1000 - SYNC_DAYS * 86400
+  const missing = load(at.project)?.commits.filter(c => c.repo === at.repo && c.branch === undefined && c.ts >= since) ?? []
+
+  if (!missing.length)
+    return
+
+  const current = currentBranch(at.path)
+  const found = new Map(missing.map(c => [c.sha, branchOf(at.path, c.sha, current)]))
+
+  update(at.project, (inbox) => {
+    for (const c of inbox.commits) {
+      if (found.has(c.sha))
+        c.branch = found.get(c.sha)!
+    }
+  })
 }

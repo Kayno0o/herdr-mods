@@ -8,12 +8,12 @@ import { addCommit, syncRepo } from './add'
 import { configFile, loadConfig, tilidAdvance } from './config'
 import { knownForges } from './forge'
 import { lineOf, renderView, textAt } from './format'
-import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, nextShotId, readOrder, setNoteState } from './inbox'
+import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
 import { readTrace } from './trace'
-import { summary, view } from './view'
+import { noteOwner, readsOf, summary, view } from './view'
 
 export const CLI = `bun ${import.meta.path}`
 
@@ -147,13 +147,16 @@ const commands: Record<string, () => void | Promise<void>> = {
 
     const side = (at?.side ?? flags.side ?? 'new') as Side
     const line = at?.line ?? (flags.line ? Number(flags.line) : null)
+    const text = line === null ? null : textAt(file.patch, side, line)
+    // a feature's note is kept by the ticket that wrote its line, whose Claude it is sent to
+    const owner = noteOwner(inboxOf(project!), findItem(inboxOf(project!), item!), file, side, text)
     const note = update(project!, inbox => addNote(inbox, {
-      item: findItem(inbox, item!).key,
+      item: owner,
       repo: file.repo,
       path: file.path,
       side,
       line,
-      text: line === null ? null : textAt(file.patch, side, line),
+      text,
 
       author: (flags.author ?? 'claude') as 'claude' | 'me',
       body: body.join(' '),
@@ -184,7 +187,12 @@ const commands: Record<string, () => void | Promise<void>> = {
     const shown = view(inboxOf(project!), item!)
     const files = flags.all ? shown.files : paths.map(path => fileOf(project!, item!, path))
 
-    update(project!, inbox => markRead(inbox, shown.key, files, flags.undo))
+    const reads = readsOf(inboxOf(project!), shown.key, files)
+
+    update(project!, (inbox) => {
+      for (const r of reads)
+        markRead(inbox, r.item, r.files, flags.undo)
+    })
     print(files.map(f => f.path), `${flags.undo ? 'unread' : 'read'}: ${files.length}`)
   },
   approve() {
@@ -267,7 +275,7 @@ const commands: Record<string, () => void | Promise<void>> = {
   brief() {
     const [project, ...refs] = need(1, '<project> [<item>...]')
     const inbox = inboxOf(project!)
-    const items = refs.length ? refs.map(ref => findItem(inbox, ref)) : itemsOf(inbox)
+    const items = refs.length ? refs.flatMap(ref => membersOf(inbox, findItem(inbox, ref))) : itemsOf(inbox)
 
     print(brief(inbox, items, CLI), brief(inbox, items, CLI))
   },

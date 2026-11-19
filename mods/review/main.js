@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
-import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap } from "./model.js";
+import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, LIST_MAX, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
 import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
@@ -28,9 +28,11 @@ const messageOf = (e) => e instanceof Error ? e.message : String(e);
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
 const short = (sha) => sha.slice(0, 8);
+const branchOf = (featureKey) => featureKey.slice(featureKey.indexOf(":") + 1);
 const fail = (e) => notify({ title: "Review", body: messageOf(e), level: "error" });
 const statusColour = (f, t) => f.status === "added" ? t.ansi2 : f.status === "deleted" ? t.ansi1 : f.status === "renamed" ? t.ansi5 : t.accent;
 const PNG_SIZE = /(\d+) x (\d+)/;
+const TICKET_PREFIX = /^#\d+ - /;
 
 // An image has no aspect-ratio style, so a shot is sized from its own pixels to fit the room.
 function fitted(shot, width, height) {
@@ -90,7 +92,7 @@ export default class Review extends View {
     // Working
     this.seen = {}; this.now = null; this.base = "HEAD"; this.statusSeen = null; this.workFiles = [];
     // The diff shown
-    this.files = []; this.notes = []; this.list = []; this.heights = []; this.opened = new Set(); this.groupOpen = false; this.cursor = 0;
+    this.files = []; this.notes = []; this.list = []; this.headers = []; this.heights = []; this.opened = new Set(); this.groupOpen = false; this.cursor = 0;
     // the item's requirements on its hunks, and the one picked with the hunk it is on (`k` a requirement's index, or "outside")
     this.traced = traceMap([], []); this.reqPick = null;
     // top: the first row the list drew, whose file the diff names above it
@@ -202,7 +204,7 @@ export default class Review extends View {
     }
     const items = summary.items, project = summary.project;
     const wanted = this.wanted && items.find((i) => i.commits.some((c) => c.sha.startsWith(this.wanted)));
-    const key = wanted?.key ?? items.find((i) => i.key === this.itemKey || i.ticket && `#${i.ticket.number}` === this.itemKey)?.key ?? items.find((i) => !i.approved)?.key ?? null;
+    const key = wanted?.key ?? items.find((i) => i.key === this.itemKey || i.ticket && `#${i.ticket.number}` === this.itemKey)?.key ?? railOrder(items, false)[0]?.key ?? null;
     const item = key ? await cli("show", project, key, ...(this.commit ? ["--commit", this.commit] : [])) : null;
     if (stale()) return;
     this.wanted = null;
@@ -267,6 +269,15 @@ export default class Review extends View {
 
   rebuild() {
     this.list = buildList(this.files, this.notes, this.opened, this.groupOpen);
+    // too long for the list whole, the item shows its files one at a time: the one moved to opens
+    this.big = this.list.length > LIST_MAX;
+    if (this.big) this.list = buildList(this.files, this.notes, this.opened, this.groupOpen, true).slice(0, LIST_MAX);
+    // each file's header row, or the mechanical group's while it is folded: the rail asks for every file's on each draw
+    this.headers = [];
+    this.list.forEach((e, i) => {
+      if (e.kind === "file") this.headers[e.fi] = i;
+      else if (e.kind === "group") for (let fi = e.from; fi < e.to; fi++) this.headers[fi] ??= i;
+    });
     this.heights = this.list.map((e) => heightOf(e, this.cols, this.files));
     this.cursor = Math.min(this.cursor, Math.max(this.list.length - 1, 0));
     if (this.picked && !this.notes.some((n) => n.id === this.picked)) this.picked = null;
@@ -301,8 +312,7 @@ export default class Review extends View {
 
   // A mechanical file's header, or the group row while it is folded.
   headerOf(fi) {
-    const at = this.list.findIndex((e) => e.kind === "file" && e.fi === fi);
-    return at >= 0 ? at : this.list.findIndex((e) => e.kind === "group" && fi >= e.from && fi < e.to);
+    return this.headers[fi] ?? -1;
   }
 
   toggleGroup(cx) {
@@ -321,6 +331,13 @@ export default class Review extends View {
     this.write(() => cli("read", this.project, key, ...files.map((f) => `${f.repo}:${f.path}`)), cx);
   }
 
+  // In an item shown a file at a time, the file moved to is the one open.
+  focusFile(fi) {
+    if (!this.big || this.opened.has(fi)) return;
+    this.opened = new Set([fi]);
+    this.rebuild();
+  }
+
   hunksOf(k) {
     return k === "outside" ? this.traced.outside : this.traced.reqs[k]?.hunks ?? [];
   }
@@ -333,7 +350,8 @@ export default class Review extends View {
     this.reqPick = { k, n }; this.shot = null; this.h.focus();
     const { fi, ri } = hunks[n], file = this.files[fi];
     if (file.mechanical) this.groupOpen = true;
-    if (file.read) this.opened.add(fi);
+    if (this.big) this.opened = new Set([fi]);
+    else if (file.read) this.opened.add(fi);
     this.rebuild();
     this.moveTo(this.list.findIndex((e) => e.fi === fi && e.ri === ri), cx, "top", true);
   }
@@ -380,6 +398,7 @@ export default class Review extends View {
     this.toggleRead(fi, cx, true);
     const next = nextUnread(this.files, fi);
     if (next < 0) { this.moveTo(this.headerOf(fi), cx); notify({ title: "Review", body: this.openCount() ? "Every file read: n goes through the open notes" : "Every file read: a approves", level: "success", timeout: 2500 }); return; }
+    this.focusFile(next);
     this.moveTo(this.headerOf(next), cx, "top");
   }
 
@@ -405,7 +424,9 @@ export default class Review extends View {
 
   jumpFile(step, cx) {
     const to = fileJump(this.list, this.cursor, step, this.files.length);
-    if (to >= 0) this.moveTo(this.headerOf(to), cx, "top");
+    if (to < 0) return;
+    this.focusFile(to);
+    this.moveTo(this.headerOf(to), cx, "top");
   }
 
   // The approved items show while asked for, or while one of them is shown.
@@ -425,14 +446,19 @@ export default class Review extends View {
     const item = this.item;
     if (!item) return;
     const undo = item.approved;
-    const after = this.summary.items.slice(this.summary.items.findIndex((i) => i.key === item.key) + 1).find((i) => !i.approved);
+    // past a feature's own tickets, which its approval approves
+    const order = railOrder(this.summary.items, false), gone = new Set([item.key, ...item.feature?.tickets.map((t) => t.key) ?? []]);
+    const after = order.slice(order.findIndex((i) => i.key === item.key) + 1).find((i) => !gone.has(i.key));
     item.approved = !undo; this.tally(); cx.notify();
     this.write(async () => {
       await cli("approve", this.project, item.key, ...(undo ? ["--undo"] : []));
       if (!undo && after) { this.itemKey = after.key; this.commit = null; }
       if (!tilid) return;
-      const moved = await cli("advance", this.project, item.key);
-      notify({ title: "Review", body: moved.moved ? `#${moved.number} is now "${moved.status}" in Tilid` : `#${moved.number} stays where it is in Tilid: ${moved.skipped}`, level: moved.moved ? "success" : "warning" });
+      // Tilid moves ticket by ticket, a feature's each in turn
+      for (const key of item.feature ? item.feature.tickets.map((t) => t.key) : [item.key]) {
+        const moved = await cli("advance", this.project, key);
+        notify({ title: "Review", body: moved.moved ? `#${moved.number} is now "${moved.status}" in Tilid` : `#${moved.number} stays where it is in Tilid: ${moved.skipped}`, level: moved.moved ? "success" : "warning" });
+      }
     }, cx);
   }
 
@@ -648,7 +674,9 @@ export default class Review extends View {
     if (e.kind === "file") {
       const file = this.files[e.fi];
       const onBox = this.pressX !== null && this.pressX >= this.diffW + SCROLLBAR_W - READ_BOX_W;
-      if (this.tab === "inbox" && (!file.read || onBox)) this.toggleRead(e.fi, cx);
+      const folded = this.big && !this.opened.has(e.fi);
+      if (this.tab === "inbox" && ((!file.read && !folded) || onBox)) this.toggleRead(e.fi, cx);
+      else if (folded) this.focusFile(e.fi);
       else { if (this.opened.has(e.fi)) this.opened.delete(e.fi); else this.opened.add(e.fi); this.rebuild(); }
       this.h.focus(); cx.notify();
       return;
@@ -708,22 +736,27 @@ export default class Review extends View {
     };
     const row = (i) => {
       const on = i.key === this.itemKey;
-      return v_flex().id(`item-${i.key}`).mx(8).px(12).py(10).gap(6).rounded(8).cursor_pointer()
+      const feature = i.tickets?.length > 0;
+      // a feature's tickets sit indented under its row
+      return v_flex().id(`item-${i.key}`).ml(i.feature && !i.approved ? 28 : 8).mr(8).px(12).py(10).gap(6).rounded(8).cursor_pointer()
         .when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(on ? t.selected : t.hover))
         .on_click((_e, cx) => this.pickItem(i.key, cx))
         .child(h_flex().gap(7).items_baseline().min_w(0)
-          .child(div().flex_none().font_family(MONO()).text_size(11.5).text_color(i.approved ? t.ansi2 : t.accent).child(i.ticket ? `#${i.ticket.number}` : short(i.key)))
-          .child(div().flex_1().min_w(0).truncate().text_color(i.approved ? t.muted : t.foreground).child(i.ticket ? i.ticket.title : i.subject)))
+          .child(div().flex_none().font_family(MONO()).text_size(11.5).text_color(i.approved ? t.ansi2 : t.accent).child(feature ? "feature" : i.ticket ? `#${i.ticket.number}` : short(i.key)))
+          .child(div().flex_1().min_w(0).truncate().text_color(i.approved ? t.muted : t.foreground).when(feature, (e) => e.font_semibold()).child(feature ? branchOf(i.key) : i.ticket ? i.ticket.title : i.subject)))
         .child(h_flex().gap(8).items_center().text_size(11).text_color(t.dim)
           .child(div().flex_none().child(daysLabel(i.ts)))
+          .when(feature, (e) => e.child(div().flex_none().child(plural(i.tickets.length, "ticket"))))
           .when(i.ticket && i.ticket.screen, (e) => e.child(div().min_w(0).truncate().child(i.ticket.screen)))
           .child(div().flex_1())
           .when(!i.approved, (e) => e.child(progress(i)))
           .when(i.approved, (e) => e.child(div().text_color(t.ansi2).child(icon("check", 13)))));
     };
     // The shown item lists its files under its row, each a jump to its place in the diff.
+    // a feature's come after its tickets, which sit right under its row
     const withFiles = (i) => {
-      const shown = i.key === this.itemKey && this.item?.key === i.key && this.files.length > 0;
+      const owner = i.tickets?.length ? null : i.feature && this.summary.items.find((f) => f.key === i.feature)?.tickets.at(-1) === i.key ? i.feature : i.key;
+      const shown = owner === this.itemKey && this.item?.key === owner && this.files.length > 0;
       if (!shown) return [row(i)];
       const here = this.list[this.cursor]?.fi;
       const mechanical = this.files.findIndex((f) => f.mechanical);
@@ -735,6 +768,7 @@ export default class Review extends View {
           .on_click((_e, cx) => {
             this.shot = null; this.h.focus();
             if (f.mechanical && !this.groupOpen) { this.groupOpen = true; this.rebuild(); }
+            this.focusFile(fi);
             this.moveTo(this.headerOf(fi), cx, "top");
           })
           .child(this.tick(f.read, 12, t))
@@ -785,8 +819,8 @@ export default class Review extends View {
     const loose = item.notes.filter((n) => !n.path);
     return v_flex().flex_none().px(24).pt(20).pb(16).gap(14).border_b(1).border_color(t.border)
       .child(h_flex().gap(12).items_center().min_w(0)
-        .child(div().flex_none().font_family(MONO()).text_size(17).text_color(item.approved ? t.ansi2 : t.accent).child(ticket ? `#${ticket.number}` : short(item.key)))
-        .child(div().min_w(0).truncate().text_size(17).font_semibold().child(ticket ? ticket.title : item.commits[0]?.subject ?? ""))
+        .child(div().flex_none().font_family(MONO()).text_size(17).text_color(item.approved ? t.ansi2 : t.accent).child(item.feature ? "feature" : ticket ? `#${ticket.number}` : short(item.key)))
+        .child(div().min_w(0).truncate().text_size(17).font_semibold().child(item.feature ? item.feature.branch : ticket ? ticket.title : item.commits[0]?.subject ?? ""))
         .when(Boolean(ticket?.screen), (e) => e.child(div().flex_none().px(7).h(20).flex().items_center().rounded(5).bg(t.raised).font_family(MONO()).text_size(10.5).text_color(t.muted).child(ticket.screen)))
         .child(div().flex_1())
         .when(Boolean(tilid), (e) => e.child(this.button("tilid", h_flex().gap(4).items_center().child("Tilid").child(icon("arrow-up-right", 12)), (cx) => cx.open_url(tilid), t, "Open the ticket in Tilid", "ghost"))))
@@ -797,9 +831,17 @@ export default class Review extends View {
         .on_click((_e, cx) => this.pickNote(n.id, cx))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(`${n.author} · ${n.state}`))
         .child(div().flex_1().min_w(0).truncate().text_size(12).child(n.body.split("\n")[0]))))
-      .when(item.commits.length > 1 || Boolean(this.commit), (e) => e.child(h_flex().gap(8).flex_wrap()
-        .child(chip("commit-all", `All ${item.commits.length} commits`, !this.commit, (cx) => this.pickCommit(null, cx), "The ticket's net change, what its commits add up to"))
-        .children(item.commits.map((c) => chip(`commit-${c.sha}`, h_flex().gap(6).min_w(0)
+      // a feature filters by ticket rather than by commit; a ticket of one goes back to it
+      .when(Boolean(item.feature), (e) => e.child(h_flex().gap(8).flex_wrap()
+        .child(chip("ticket-all", `All ${item.feature.tickets.length} tickets`, true, () => {}, "The feature's net change, what its tickets add up to"))
+        .children(item.feature.tickets.map((tk) => chip(`ticket-${tk.key}`, h_flex().gap(6).min_w(0)
+          .child(div().flex_none().font_family(MONO()).text_size(11).text_color(t.accent).child(tk.key))
+          .child(div().min_w(0).truncate().child(tk.screen ?? tk.title.replace(TICKET_PREFIX, ""))),
+        false, (cx) => this.pickItem(tk.key, cx), `${tk.title}\nIts own change, alone`)))))
+      .when(!item.feature && (item.commits.length > 1 || Boolean(this.commit) || Boolean(item.partOf)), (e) => e.child(h_flex().gap(8).flex_wrap()
+        .when(Boolean(item.partOf), (x) => x.child(chip("feature", h_flex().gap(6).items_center().child(icon("chevron-left", 12)).child(branchOf(item.partOf ?? "")), false, (cx) => this.pickItem(item.partOf, cx), "Back to the feature this ticket is part of")))
+        .when(item.commits.length > 1 || Boolean(this.commit), (x) => x.child(chip("commit-all", `All ${item.commits.length} commits`, !this.commit, (cx) => this.pickCommit(null, cx), "The ticket's net change, what its commits add up to")))
+        .children((item.commits.length > 1 || this.commit ? item.commits : []).map((c) => chip(`commit-${c.sha}`, h_flex().gap(6).min_w(0)
           .child(div().flex_none().font_family(MONO()).text_size(11).text_color(t.accent).child(c.sha.slice(0, 7)))
           .child(div().min_w(0).truncate().child(c.subject))
           .when(c.copies.length > 0, (e) => e.child(h_flex().flex_none().gap(3).items_center().text_color(t.dim).child(icon("copy", 11)).child(String(c.copies.length)))),
@@ -829,7 +871,7 @@ export default class Review extends View {
         .when(open > 0, (e) => e.child(this.button("send", `Send ${plural(open, "note")}`, (cx) => this.sendNotes(cx), t, "Paste the open notes into the Claude that made these commits (s)")))
         .child(div().pl(16).text_size(12).text_color(t.muted).child("Ask Claude"))
         .when(!item.prose, (e) => e.child(this.button("describe", "Describe", (cx) => this.askClaude("describe", cx), t, "Ask the Claude to describe what it changes and why")))
-        .when(Boolean(item.ticket) && !this.traced.reqs.length, (e) => e.child(this.button("ask-trace", "Trace", (cx) => this.askClaude("trace", cx), t, "Ask the Claude to list the ticket's requirements with the lines doing each")))
+        .when(Boolean(item.ticket || item.feature) && !this.traced.reqs.length, (e) => e.child(this.button("ask-trace", "Trace", (cx) => this.askClaude("trace", cx), t, "Ask the Claude to list the ticket's requirements with the lines doing each")))
         .child(this.button("ask-review", "Review", (cx) => this.askClaude("review", cx), t, "Ask the Claude to read it and note what is wrong, risky or unclear"))
         .child(this.button("ask-shots", "Screens", (cx) => this.askClaude("shots", cx), t, "Ask the Claude for before and after screenshots of the screens it changes"))
         .child(div().flex_1())

@@ -1,6 +1,6 @@
 import type { Commit, Inbox } from './types'
 import { describe, expect, test } from 'bun:test'
-import { addNote, approve, brief, digest, emptyInbox, fileCommit, findItem, itemsOf, markRead, orderFiles, readOrder, setNoteState } from './inbox'
+import { addNote, approve, brief, digest, emptyInbox, featuresOf, fileCommit, findItem, itemsOf, markRead, orderFiles, readOrder, setNoteState } from './inbox'
 import { parseTicket, ticketsIn } from './tickets'
 
 const ticket = (line: string) => parseTicket(line)!
@@ -136,5 +136,32 @@ describe('reading order', () => {
       ['web:lock.json', null, true],
     ])
     expect(orderFiles(files, []).map(f => f.path)).toEqual(['a.ts', 'b.ts', 'a.ts', 'lock.json'])
+  })
+})
+
+describe('features', () => {
+  const on = (branch: string) => ({ branch })
+  const box = () => inbox(
+    commit('a', 1, '#1 - [ONE] One', on('feature/groups')),
+    commit('b', 2, '#2 - [TWO] Two', on('feature/groups')),
+    commit('c', 3, '#3 - [THREE] Three', on('feature/groups')),
+    commit('d', 4, '#4 - [ALONE] Alone', on('feature/alone')),
+    commit('e', 5, '#5 - [MAIN] Main', on('main')),
+    commit('f', 6, '#6 - [OLD] Old'),
+  )
+
+  test('gathers the tickets left to review on one feature branch, two at least, over all their commits', () => {
+    const inb = box()
+
+    approve(inb, findItem(inb, '3'))
+    expect(featuresOf(itemsOf(inb)).map(f => [f.key, f.feature!.tickets, f.commits.map(c => c.sha)])).toEqual([['feature:feature/groups', ['#1', '#2'], ['a', 'b']]])
+  })
+
+  test('approving a feature approves each of its tickets, and it is found by its key', () => {
+    const inb = box()
+
+    approve(inb, findItem(inb, 'feature:feature/groups'))
+    expect(itemsOf(inb).filter(i => i.approved).map(i => i.key)).toEqual(['#1', '#2', '#3'])
+    expect(() => findItem(inb, 'feature:feature/groups')).toThrow('no ticket or loose commit')
   })
 })

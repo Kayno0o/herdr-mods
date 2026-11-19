@@ -13,6 +13,8 @@ const CHAR_W = CODE_SIZE * 0.6;
 // the cursor bar, the line number and the +/- sign before a line's text, then a margin after it
 const GUTTER = 3 + 46 + 12 + 8;
 export const FILE_H = 40;
+// the most rows the diff's virtual list takes: past it, files show one at a time
+export const LIST_MAX = 10000;
 export const HUNK_H = 28;
 // a note card's margins, padding, border and author line
 const NOTE_HEAD_H = 46;
@@ -118,8 +120,8 @@ export function wrapLine(text, marks, cols) {
 // A file only added or only deleted shows in one column, its existing side.
 export const singleSide = (file) => file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
 
-// A whole item as the list draws it: each file's header, then, unless it is read and folded, its rows with their notes; every entry knows its file. The mechanical files, last in a reading order, sit under one group row and show only once it is opened.
-export function buildList(files, notes, open = new Set(), groupOpen = false) {
+// A whole item as the list draws it: each file's header, then, unless it is read and folded (or `foldAll` folds it), its rows with their notes; every entry knows its file. The mechanical files, last in a reading order, sit under one group row and show only once it is opened.
+export function buildList(files, notes, open = new Set(), groupOpen = false, foldAll = false) {
   const list = [];
   const notesOf = (file) => notes.filter((n) => n.path === file.path && (!n.repo || !file.repo || n.repo === file.repo));
   const from = files.findIndex((f) => f.mechanical);
@@ -131,7 +133,7 @@ export function buildList(files, notes, open = new Set(), groupOpen = false) {
     }
     if (from >= 0 && fi >= from && !groupOpen) return;
     list.push({ kind: "file", fi, open: own.filter((n) => n.state === "open").length });
-    if (file.read && !open.has(fi)) return;
+    if ((file.read || foldAll) && !open.has(fi)) return;
     if (file.binary) { list.push({ kind: "meta", fi, text: "Binary file" }); return; }
     const rows = sideRows(file.patch), placed = placeNotes(rows, own);
     for (const { note, moved } of placed.get(-1) ?? []) list.push({ kind: "note", fi, note, moved });
@@ -199,8 +201,15 @@ export function fileJump(list, cursor, step, count) {
 }
 
 // The rail's items in its order: tickets, loose commits, then the approved ones, newest first, while shown.
+// A feature takes the place of its first ticket, with its tickets under it.
 export function railGroups(items) {
-  return { tickets: items.filter((i) => i.ticket && !i.approved), loose: items.filter((i) => !i.ticket && !i.approved), done: items.filter((i) => i.approved).reverse() };
+  const byKey = new Map(items.map((i) => [i.key, i]));
+  const tickets = items.filter((i) => i.ticket && !i.approved).flatMap((i) => {
+    if (!i.feature) return [i];
+    const feature = byKey.get(i.feature);
+    return feature?.tickets[0] === i.key ? [feature, ...feature.tickets.map((k) => byKey.get(k)).filter(Boolean)] : [];
+  });
+  return { tickets, loose: items.filter((i) => !i.ticket && !i.tickets?.length && !i.approved), done: items.filter((i) => i.approved).reverse() };
 }
 
 export function railOrder(items, history) {
@@ -276,6 +285,6 @@ export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,
   describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`,
   file: (cli, project, shas) => `File the loose commits ${shas.join(", ")} of the ${project} review inbox under their Tilid tickets: for each, find the ticket it belongs to in Tilid and run \`${cli} file ${project} <sha> "#<number> - [<USE_CASE>] <title>"\`. Leave a commit that belongs to no ticket alone.`,
-  trace: (cli, project, item) => `Trace ${item.title} to its requirements, as the review skill says: read the ticket and the spec of the use case it names (a forge issue's checklist when it is no Tilid ticket), read \`${cli} show ${project} ${item.key}\`, then run \`${cli} trace ${project} ${item.key}\` with on stdin one \`- <requirement, in the spec's own words>\` line per requirement, each followed by indented \`<path> <text of a line doing it>\` lines and \`partly: <what is left, in French>\` when it is only partly done. A requirement nothing does gets no line under it.`,
+  trace: (cli, project, item) => `Trace ${item.title} to its requirements, as the review skill says: read the ticket and the spec of the use case it names (a forge issue's checklist when it is no Tilid ticket), read \`${cli} show ${project} ${item.key}\`, then run \`${cli} trace ${project} ${item.key}\` with on stdin one \`- <requirement, in the spec's own words>\` line per requirement, each followed by indented \`<path> <text of a line doing it>\` lines and \`partly: <what is left, in French>\` when it is only partly done. A requirement nothing does gets no line under it.${item.feature ? ` It is a feature: do it for each of its tickets, ${item.feature.tickets.map((t) => t.key).join(", ")}, each ticket's requirements under a \`## #<number>\` line.` : ""}`,
   shots: (cli, project, item) => `Take before and after screenshots of the screens ${item.title} changes, following the review skill: write its scenario, then \`${cli} shoot ${project} ${item.key} --stack <dir>\` on a disposable stack, never mine, and look at every image it takes.`,
 };

@@ -28,6 +28,8 @@ export interface Commit {
   copies: string[]
   // the Claude terminal that made it, for handing its notes back
   terminal: string | null
+  // the branch checked out when it was made, null when detached; absent in inboxes filed before it
+  branch?: string | null
 }
 
 export interface Note {

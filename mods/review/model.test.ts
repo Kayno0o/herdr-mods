@@ -65,6 +65,10 @@ describe('buildList', () => {
     expect(buildList(files, notes, new Set([1])).filter((e: Entry) => e.fi === 1)).toHaveLength(6)
   })
 
+  test('folds every file not opened when asked to, for an item too long to list whole', () => {
+    expect(buildList(files, notes, new Set([1]), false, true).map((e: Entry) => e.kind === 'file' ? `file ${e.fi}` : e.kind)).toEqual(['file 0', 'file 1', 'hunk', 'pair', 'pair', 'pair', 'pair'])
+  })
+
   test('finds the next unread file and the next open note, wrapping around', () => {
     const list: Entry[] = buildList(files, notes)
 
@@ -245,5 +249,11 @@ describe('railOrder', () => {
   test('tickets, then loose commits, the approved ones only while the history shows, newest first', () => {
     expect(railOrder(items, false).map(i => i.key)).toEqual(['t1', 't2', 'loose'])
     expect(railOrder(items, true).map(i => i.key)).toEqual(['t1', 't2', 'loose', 'new', 'old'])
+  })
+
+  test('a feature comes where its first ticket was, its tickets right under it', () => {
+    const featured = [{ key: 't0', ticket: {} }, { key: 't1', ticket: {}, feature: 'f' }, { key: 'loose' }, { key: 't2', ticket: {}, feature: 'f' }, { key: 't3', ticket: {} }, { key: 'f', tickets: ['t1', 't2'] }]
+
+    expect(railOrder(featured, false).map(i => i.key)).toEqual(['t0', 'f', 't1', 't2', 't3', 'loose'])
   })
 })

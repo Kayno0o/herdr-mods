@@ -14,13 +14,19 @@ export function emptyInbox(project: string, tilid: Inbox['tilid'] = null): Inbox
 }
 
 export interface Item {
-  // `#1525`, or a loose commit's sha
+  // `#1525`, a loose commit's sha, or `feature:<branch>`
   key: string
   ticket: Ticket | null
   // oldest first
   commits: Commit[]
   approved: boolean
+  // a feature's branch and the keys of its tickets
+  feature?: { branch: string, tickets: string[] }
 }
+
+export const FEATURE_KEY = 'feature:'
+// the branches whose tickets gather into a feature
+export const FEATURE_BRANCH = /^(?:feature|feat)\//
 
 // Every ticket with its commits, then each commit naming no ticket on its own with its fixups, oldest first.
 export function itemsOf(inbox: Inbox): Item[] {
@@ -63,11 +69,36 @@ export function itemsOf(inbox: Inbox): Item[] {
   return items
 }
 
-// Finds an item by `#12`, `12`, a sha or the start of one.
+// The tickets left to review whose last commit was made on one feature branch, two at least, as one item over all their commits; approving it approves them.
+export function featuresOf(items: Item[]): Item[] {
+  const byBranch = new Map<string, Item[]>()
+
+  for (const item of items) {
+    const branch = item.ticket && !item.approved ? item.commits.at(-1)!.branch : null
+
+    if (branch && FEATURE_BRANCH.test(branch))
+      byBranch.set(branch, [...byBranch.get(branch) ?? [], item])
+  }
+
+  return [...byBranch].filter(([, tickets]) => tickets.length > 1).map(([branch, tickets]) => ({
+    key: `${FEATURE_KEY}${branch}`,
+    ticket: null,
+    commits: [...new Map(tickets.flatMap(t => t.commits).map(c => [c.sha, c])).values()].toSorted((a, b) => a.ts - b.ts),
+    approved: false,
+    feature: { branch, tickets: tickets.map(t => t.key) },
+  }))
+}
+
+// The tickets an item stands for: a feature's, else itself.
+export function membersOf(inbox: Inbox, item: Item): Item[] {
+  return item.feature ? itemsOf(inbox).filter(i => item.feature!.tickets.includes(i.key)) : [item]
+}
+
+// Finds an item by `#12`, `12`, a sha or the start of one, or a feature by its key.
 export function findItem(inbox: Inbox, ref: string): Item {
   const items = itemsOf(inbox)
   const key = NUMBER.test(ref) ? `#${ref}` : ref
-  const found = items.find(item => item.key === key) ?? items.filter(item => !item.ticket && item.key.startsWith(ref))
+  const found = items.find(item => item.key === key) ?? (ref.startsWith(FEATURE_KEY) ? featuresOf(items).find(f => f.key === ref) : undefined) ?? items.filter(item => !item.ticket && item.key.startsWith(ref))
 
   if (!Array.isArray(found))
     return found
@@ -248,6 +279,13 @@ export function orderFiles<T extends FileRef>(files: T[], order: OrderEntry[]): 
 }
 
 export function approve(inbox: Inbox, item: Item, undo = false) {
+  if (item.feature) {
+    for (const ticket of membersOf(inbox, item))
+      approve(inbox, ticket, undo)
+
+    return
+  }
+
   if (undo)
     delete inbox.approved[item.key]
   else
@@ -257,7 +295,12 @@ export function approve(inbox: Inbox, item: Item, undo = false) {
 // Past the highest id rather than the count, so a deleted shot's id is never handed out again.
 export const nextShotId = (inbox: Inbox) => `s${String(Math.max(0, ...inbox.shots.map(s => Number(s.id.slice(1)) || 0)) + 1).padStart(3, '0')}`
 
-export const itemTitle = (item: Item) => item.ticket ? ticketLine(item.ticket) : `${item.key.slice(0, 8)} ${item.commits[0]!.subject}`
+export function itemTitle(item: Item) {
+  if (item.feature)
+    return `${item.feature.branch}: ${item.feature.tickets.length} tickets`
+
+  return item.ticket ? ticketLine(item.ticket) : `${item.key.slice(0, 8)} ${item.commits[0]!.subject}`
+}
 
 const where = (note: Note) => `${note.path}${note.line ? `:${note.line}${note.side === 'old' ? ' (old side)' : ''}` : ''}`
 

@@ -156,3 +156,35 @@ test('the trace command keeps an item\'s requirements with the lines doing them,
   }
   finally { other.cleanup() }
 })
+
+test('a feature branch\'s tickets review as one item: read files count in each ticket, a note goes to the ticket that wrote its line', () => {
+  const other = makeRepo('featured')
+  const cli = (...args: string[]) => Bun.spawnSync(['bun', join(import.meta.dir, 'cli.ts'), ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+
+  try {
+    other.commit('chore: base', { 'shared.ts': 'a\nb\n', 'one.ts': '1\n', 'two.ts': '2\n' })
+    git(other.dir, ['checkout', '-q', '-b', 'feature/groups'])
+    addCommit(other.dir, other.commit('feat: one\n\n#21 - [ONE] One', { 'shared.ts': 'A\nb\n', 'one.ts': 'un\n' }))
+    addCommit(other.dir, other.commit('feat: two\n\n#22 - [TWO] Two', { 'shared.ts': 'A\nB\n', 'two.ts': 'deux\n' }))
+    const key = 'feature:feature/groups'
+    const s = summary(load('featured')!)
+
+    expect(s.items.map(i => [i.key, i.feature])).toEqual([['#21', key], ['#22', key], [key, null]])
+    expect(view(load('featured')!, key).files.map(f => f.path).toSorted()).toEqual(['one.ts', 'shared.ts', 'two.ts'])
+
+    expect(cli('read', 'featured', key, 'one.ts', 'shared.ts').stderr.toString()).toBe('')
+    const read = (item: string) => view(load('featured')!, item).files.filter(f => f.read).map(f => f.path)
+
+    expect([read(key), read('21'), read('22')]).toEqual([['one.ts', 'shared.ts'], ['one.ts', 'shared.ts'], ['shared.ts']])
+
+    expect(cli('note', 'featured', key, 'shared.ts', 'pourquoi B', '--at', 'B').stderr.toString()).toBe('')
+    expect(cli('note', 'featured', key, 'one.ts', 'et ici', '--at', 'un').stderr.toString()).toBe('')
+    expect(load('featured')!.notes.map(n => [n.body, n.item])).toEqual([['pourquoi B', '#22'], ['et ici', '#21']])
+    expect(view(load('featured')!, key).notes).toHaveLength(2)
+    expect(cli('brief', 'featured', key).stdout.toString()).toContain('pourquoi B')
+
+    expect(cli('approve', 'featured', key).stderr.toString()).toBe('')
+    expect(summary(load('featured')!).items.map(i => [i.key, i.approved])).toEqual([['#21', true], ['#22', true]])
+  }
+  finally { other.cleanup() }
+})
