@@ -21,7 +21,7 @@ review inbox <project>            # or --repo <dir>: tickets and loose commits, 
 review show <project> <item>      # the item's net diff with its notes; --commit <sha> for one commit
 ```
 
-An item is `#13859` (or `13859`) or the start of a loose commit's sha. Where intent is not obvious from the hunks, read the file at that commit: `git -C <repo> show <sha>:<path>`. A description written off the patch alone is usually wrong about why.
+An item is `#13859` (or `13859`), the start of a loose commit's sha, or `feature:<branch>`: two or more tickets left to review on one `feature/` branch gather into it, its net diff theirs. A note written on a feature goes to the ticket whose commit wrote its line, reading a file there reads it in each ticket, and approving it approves them all; describe, order and trace it as one item. Where intent is not obvious from the hunks, read the file at that commit: `git -C <repo> show <sha>:<path>`. A description written off the patch alone is usually wrong about why.
 
 ## Describing
 
