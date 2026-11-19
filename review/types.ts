@@ -60,6 +60,17 @@ export interface Shot {
   source?: 'shoot'
   // why the last capture failed, its screenshot kept since it usually shows why
   error?: string | null
+  // what differs between its two pictures, on the after one, and how much taller it got; absent on shots taken before regions were
+  regions?: Region[]
+  grew?: number
+}
+
+// A box on a screenshot, in its pixels.
+export interface Region {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 // A line a requirement is implemented on, found again by its text once later commits move it, as a note is.

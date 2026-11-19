@@ -81,9 +81,10 @@ test('a retaken shot keeps its place, and the scenario\'s shots it no longer nam
     for (const file of ['s001-b.png', 's002-b.png', 's003-b.png'])
       writeFileSync(join(shotsDir('p'), file), '')
 
-    record('p', '#1', { entry: { label: 'one', route: '/' }, id: 's001', files: { before: 's001-b2.png', after: 's001-a2.png' }, errors: [] }, new Set(['one', 'two']))
+    record('p', '#1', { entry: { label: 'one', route: '/' }, id: 's001', files: { before: 's001-b2.png', after: 's001-a2.png' }, errors: [], diff: { regions: [{ x: 0, y: 8, width: 16, height: 8 }], grew: 12 } }, new Set(['one', 'two']))
 
     expect(load('p')!.shots.map(s => `${s.id} ${s.before}`)).toEqual(['s001 s001-b2.png', 's003 s003-b.png', 's004 s004-b.png'])
+    expect(load('p')!.shots[0]).toMatchObject({ regions: [{ x: 0, y: 8, width: 16, height: 8 }], grew: 12 })
     expect(readdirSync(shotsDir('p')).toSorted()).toEqual(['s003-b.png'])
   }
   finally {

@@ -129,6 +129,8 @@ Shots land in the inbox at once, shown in the ticket's header. A shot whose labe
 
 A failed shot keeps its screenshot and its error, which usually says why.
 
+Each pair also keeps the regions that differ between its two pictures (`regions`, and `grew` when the page got taller), which the tab boxes and steps through. A pair with no region when the change should show, or a dozen boxes over a change that is one component, says the capture missed it or the page reflowed around it.
+
 ## Handing over
 
 Say which items you described or shot and what each pair shows, in a line or two. The user reads them in Herdr's Review tab (Ctrl+Shift+R).

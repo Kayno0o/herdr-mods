@@ -280,6 +280,17 @@ export function claudeFor(commits, live, picked) {
   return commits.findLast((c) => c.terminal && alive.has(c.terminal))?.terminal ?? picked ?? null;
 }
 
+// How a screenshot of `size` shows in `frame`: fitted whole, or zoomed on `region` with room around it (three times at most), centred on it and kept over the frame; `left` and `top` place the picture in the frame.
+export function viewOf(size, frame, region) {
+  const PAD = 32, MAX_ZOOM = 3;
+  const fit = Math.min(frame.w / size.w, frame.h / size.h);
+  const scale = region ? Math.max(fit, Math.min(MAX_ZOOM, frame.w / (region.width + 2 * PAD), frame.h / (region.height + 2 * PAD))) : fit;
+  const w = Math.floor(Math.min(frame.w, size.w * scale)), h = Math.floor(Math.min(frame.h, size.h * scale));
+  const place = (room, length, centre) => Math.round(Math.min(0, Math.max(room - length * scale, room / 2 - centre * scale)));
+  if (!region) return { scale, w, h, left: 0, top: 0 };
+  return { scale, w, h, left: place(w, size.w, region.x + region.width / 2), top: place(h, size.h, region.y + region.height / 2) };
+}
+
 // What the Ask buttons hand a Claude; `cli` is how it runs the review CLI.
 export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,

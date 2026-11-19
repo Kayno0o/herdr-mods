@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, WRAP_H, wrapLine } from './model.js'
+import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, viewOf, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -225,6 +225,23 @@ describe('the trace', () => {
 
   test('each row of a file knows its place among the file\'s rows', () => {
     expect(buildList([file('a.ts')], []).filter((e: Entry) => e.kind !== 'file').map((e: Entry & { ri?: number }) => e.ri)).toEqual([0, 1, 2, 3, 4, 5])
+  })
+})
+
+describe('viewOf', () => {
+  const size = { w: 1000, h: 2000 }
+
+  test('fits the whole picture to the frame', () => {
+    expect(viewOf(size, { w: 400, h: 400 }, null)).toEqual({ scale: 0.2, w: 200, h: 400, left: 0, top: 0 })
+  })
+
+  test('zooms on a region with room around it, centred, at three times at most', () => {
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 456, y: 972, width: 88, height: 56 })).toEqual({ scale: 2.5, w: 400, h: 300, left: -1050, top: -2350 })
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 498, y: 998, width: 4, height: 4 }).scale).toBe(3)
+  })
+
+  test('keeps the picture over the frame near an edge', () => {
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 0, y: 0, width: 64, height: 64 })).toMatchObject({ left: 0, top: 0 })
   })
 })
 

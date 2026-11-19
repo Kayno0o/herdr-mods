@@ -1,6 +1,6 @@
 // `review shoot`: an item's before and after screenshots, from its scenario, on a stack whose repos it checks out to the item's net change.
 import type { Browser, BrowserContext, Page } from 'playwright-core'
-import type { Inbox, Shot } from '../review/types'
+import type { Inbox, Region, Shot } from '../review/types'
 import type { State } from './plan'
 import type { Preset, Scenario, ScenarioShot, ShotSide } from './types'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -13,6 +13,7 @@ import { git } from '../review/git'
 import { findItem, nextShotId } from '../review/inbox'
 import { load, scenarioFile, shotName, shotsDir, update } from '../review/store'
 import { needsShooting, statesOf } from './plan'
+import { regionsIn } from './regions'
 import { checkout, repoDir, restore } from './stack'
 import { AppError } from './types'
 
@@ -160,6 +161,7 @@ export interface Planned {
   id: string
   files: Record<ShotSide, string>
   errors: string[]
+  diff?: { regions: Region[], grew: number }
 }
 
 // Files the shot, replacing its last capture, and drops the scenario's shots of this item whose label it no longer gives.
@@ -167,7 +169,7 @@ export function record(project: string, item: string, planned: Planned, labels: 
   const gone = update(project, (inbox: Inbox) => {
     const previous = inbox.shots.find(s => s.id === planned.id)
     const stale = inbox.shots.filter(s => s.item === item && s.source === 'shoot' && s.id !== planned.id && !labels.has(s.label))
-    const shot: Shot = { id: planned.id, item, label: planned.entry.label, route: planned.entry.route, before: planned.files.before, after: planned.files.after, source: 'shoot', error: planned.errors.join('\n') || null }
+    const shot: Shot = { id: planned.id, item, label: planned.entry.label, route: planned.entry.route, before: planned.files.before, after: planned.files.after, source: 'shoot', error: planned.errors.join('\n') || null, ...planned.diff }
 
     // in place, so a retaken shot keeps its spot in the header
     inbox.shots = previous ? inbox.shots.filter(s => !stale.includes(s)).map(s => s === previous ? shot : s) : [...inbox.shots.filter(s => !stale.includes(s)), shot]
@@ -281,6 +283,12 @@ export async function shoot(project: string, ref: string, options: ShootOptions)
     }
 
     for (const planned of plan) {
+      const [before, after] = SIDES.map(side => join(shotsDir(project), planned.files[side]))
+
+      // a screen one side lacks, or a video, has nothing to compare
+      if (!planned.errors.length && !planned.entry.video && existsSync(before!) && existsSync(after!))
+        planned.diff = await regionsIn(browser, before!, after!)
+
       record(project, item.key, planned, labels)
       recorded.add(planned)
       console.log(`${planned.id} ${planned.entry.label}: ${planned.errors.length ? `failed: ${planned.errors.join(' | ')}` : 'ok'}`)

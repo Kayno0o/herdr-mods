@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
-import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, LIST_MAX, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap } from "./model.js";
+import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, LIST_MAX, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap, viewOf } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
 import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
@@ -213,7 +213,7 @@ export default class Review extends View {
     this.showItem(key, item);
     await this.copyShots();
     if (stale()) return;
-    if (this.wantShot !== null && item?.shots.length) this.shot = { id: item.shots[Math.min(this.wantShot, item.shots.length - 1)].id, mode: "pair", before: false };
+    if (this.wantShot !== null && item?.shots.length) this.shot = { id: item.shots[Math.min(this.wantShot, item.shots.length - 1)].id, mode: "pair", before: false, region: null };
     this.wantShot = null;
     // a screen taken again or dropped while it showed
     if (this.shot && !item?.shots.some((s) => s.id === this.shot.id)) this.shot = null;
@@ -849,7 +849,8 @@ export default class Review extends View {
       .when(item.shots.length > 0, (e) => e.child(h_flex().id("shots").gap(12).pb(2).overflow_x_scrollbar()
         .children(item.shots.map((s, index) => {
           const on = this.shot?.id === s.id;
-          const badge = s.error ? ["failed", t.ansi1] : !s.before ? ["new", t.ansi2] : !s.after ? ["gone", t.ansi3] : null;
+          const badge = s.error ? ["failed", t.ansi1] : !s.before ? ["new", t.ansi2] : !s.after ? ["gone", t.ansi3]
+            : s.regions ? (s.regions.length ? [plural(s.regions.length, "change"), t.ansi3] : ["same", t.dim]) : null;
           const thumb = (file) => {
             const at = file && this.shots.get(file);
             return div().w(112).h(70).flex_none().rounded(6).overflow_hidden().border_1().border_color(t.border).bg(t.chrome).flex().items_center().justify_center()
@@ -1043,7 +1044,7 @@ export default class Review extends View {
   openShot(index, cx) {
     const shots = this.item?.shots ?? [];
     if (!shots.length) { notify({ title: "Review", body: "No screens for this one yet: Screens asks the Claude for them", level: "info", timeout: 2500 }); return; }
-    this.shot = { id: shots[Math.max(0, Math.min(index, shots.length - 1))].id, mode: "pair", before: false };
+    this.shot = { id: shots[Math.max(0, Math.min(index, shots.length - 1))].id, mode: "pair", before: false, region: null };
     this.h.focus();
     cx.notify();
   }
@@ -1054,6 +1055,16 @@ export default class Review extends View {
     if (!shots.length) return;
     const at = shots.findIndex((s) => s.id === this.shot.id);
     this.shot.id = shots[(at + step + shots.length) % shots.length].id;
+    this.shot.region = null;
+  }
+
+  // d and D: the next and previous region that differs, zoomed on, then the whole picture again past either end.
+  stepRegion(step) {
+    const shot = this.item?.shots.find((s) => s.id === this.shot.id), count = shot?.regions?.length ?? 0;
+    if (!count) return;
+    const at = this.shot.region ?? (step > 0 ? -1 : count);
+    const next = at + step;
+    this.shot.region = next < 0 || next >= count ? null : next;
   }
 
   // ←/→ go through the screens, b flips before and after (one at a time), m goes back and forth to side by side; the diff's keys wait until the diff is back.
@@ -1063,6 +1074,8 @@ export default class Review extends View {
     else if (k === "right" || k === "l") this.stepShot(1);
     else if (k === "b") { s.before = s.mode === "pair" ? true : !s.before; s.mode = "single"; }
     else if (k === "m") s.mode = s.mode === "pair" ? "single" : "pair";
+    else if (k === "d") this.stepRegion(1);
+    else if (k === "shift-d" || k === "D") this.stepRegion(-1);
     else return;
     cx.notify();
   }
@@ -1078,7 +1091,10 @@ export default class Review extends View {
       .when(on, (e) => e.bg(t.background).border_1().border_color(t.border)).text_color(on ? t.foreground : t.muted)
       .hover((s) => s.text_color(t.foreground)).tooltip(tip).on_click((_e, cx) => onClick(cx)).child(label);
     const segments = (children) => h_flex().p(2).gap(2).rounded(7).bg(t.raised).children(children);
-    const gap = 12, caption = 22;
+    const gap = 12, caption = 22, regions = both ? shot.regions ?? [] : [];
+    const changes = !both || !shot.regions ? null
+      : !regions.length ? "No change"
+      : view.region === null || view.region === undefined ? plural(regions.length, "change") : `Change ${view.region + 1} of ${regions.length}`;
     const room = pair ? { w: (this.shotRoom.w - gap) / 2, h: this.shotRoom.h - caption } : { w: this.shotRoom.w, h: this.shotRoom.h - caption };
     const pane = (side) => {
       const file = side === "before" ? shot.before : shot.after, at = file && this.shots.get(file);
@@ -1086,7 +1102,7 @@ export default class Review extends View {
       // the caption sits on the picture, both centred in the room
       return v_flex().flex_1().min_w(0).h_full().gap(6).items_center().justify_center()
         .child(h_flex().h(16).gap(6).items_center().text_size(11).font_semibold().text_color(side === "before" ? t.muted : t.foreground).child(label))
-        .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(fitted(at, room.w - 2, room.h - 2))))
+        .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(this.picture(at, regions, { w: room.w - 2, h: room.h - 2 }, view.region ?? null, t))))
         .when(!at, (e) => e.text_color(t.dim).child("No picture"));
     };
     return v_flex().flex_1().min_h(0).px(24).py(16).gap(14)
@@ -1097,6 +1113,8 @@ export default class Review extends View {
         .child(div().pl(4).flex_none().max_w(320).truncate().font_semibold().child(shot.label))
         .when(Boolean(shot.route), (e) => e.child(div().flex_1().min_w(0).truncate().font_family(MONO()).text_size(11.5).text_color(t.dim).child(shot.route)))
         .when(!shot.route, (e) => e.child(div().flex_1()))
+        .when(Boolean(changes), (e) => e.child(div().flex_none().text_size(11.5).text_color(regions.length ? t.ansi3 : t.dim).tooltip(regions.length ? "d and D go through them" : "Both pictures are the same").child(changes)))
+        .when(Boolean(shot.grew), (e) => e.child(div().flex_none().text_size(11.5).text_color(t.dim).child(`${shot.grew > 0 ? "grew" : "shrank"} by ${Math.abs(shot.grew)} px`)))
         .when(both, (e) => e.child(segments([
           segment("shot-pair", "Side by side", pair, set({ mode: "pair" }), "Before and after next to each other (m)"),
           segment("shot-single", "One at a time", !pair, set({ mode: "single" }), "One picture, the whole room (m)"),
@@ -1114,6 +1132,18 @@ export default class Review extends View {
         })
         .when(pair, (e) => e.child(pane("before")).child(pane("after")))
         .when(!pair, (e) => e.child(pane(before ? "before" : "after"))));
+  }
+
+  // A screen with what differs boxed and numbered, fitted whole or zoomed on region `focus`.
+  picture(at, regions, frame, focus, t) {
+    const v = viewOf(at, frame, focus === null ? null : regions[focus]);
+    return div().relative().w(v.w).h(v.h).overflow_hidden()
+      .child(image(at.path).absolute().left(v.left).top(v.top).w(Math.floor(at.w * v.scale)).h(Math.floor(at.h * v.scale)))
+      .children(regions.map((r, k) => {
+        const on = k === focus, colour = on ? t.accent : t.ansi3;
+        return div().absolute().left(v.left + r.x * v.scale - 3).top(v.top + r.y * v.scale - 3).w(r.width * v.scale + 6).h(r.height * v.scale + 6).rounded(4).border_2().border_color(colour)
+          .child(div().absolute().top(-2).left(-2).h(16).px(4).flex().items_center().rounded(3).bg(colour).text_color(t.background).text_size(10.5).font_semibold().child(String(k + 1)));
+      }));
   }
 
   // Under the diff: the composer on the picked line, or the picked note in full with its states.
@@ -1172,7 +1202,7 @@ export default class Review extends View {
 
   // The keys of what is shown: the screens, the composer, a picked note, else the diff.
   footerKeys() {
-    if (this.shot) return [["← →", "screen"], ["b", "before, after"], ["m", "side by side"], ["esc", "back to the diff"]];
+    if (this.shot) return [["← →", "screen"], ...this.item?.shots.find((s) => s.id === this.shot.id)?.regions?.length ? [["d D", "change"]] : [], ["b", "before, after"], ["m", "side by side"], ["esc", "back to the diff"]];
     if (this.target) return [["enter", "add"], ["esc", "cancel"]];
     if (this.picked) return [["v", "resolve"], ["x", "reject"], ["d", "delete"], ["n", "next note"], ["esc", "close"]];
     const move = [["j k", "line"], ["J K", "file"]];
