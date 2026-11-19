@@ -109,6 +109,7 @@ export default defineScenario({
 - `viewport` defaults to 1440x900, which crops a wide grid: size it to what the change is about. `video: true` only for a behaviour rather than a look.
 - A Vuetify tooltip opens on two real `page.mouse.move` calls, never a forced hover, and a disabled element takes no pointer event: aim at its wrapper.
 - Wait for the new state only on `side === 'after'`: the before side does not have it.
+- `mask: ['<css selector>']` paints over what changes on every load, a clock, a date, a generated id, so it is not boxed as a change.
 - A helper taking the page types it with `Page` from the same `shoot/types`: `playwright-core` does not resolve from the reviews folder.
 
 **Run it**, `--dry-run` first to see the revisions and the shot ids:

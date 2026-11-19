@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { chromium } from 'playwright-core'
-import { regionsIn, regionsOf } from './regions'
+import { regionsIn, regionsOf, regionsOfPair } from './regions'
 
 // A white picture, with `paint` filling rectangles in a colour.
 function picture(width: number, height: number, paint: [number, number, number, number, number][] = []) {
@@ -83,6 +83,12 @@ test('finds the regions of two PNGs the browser decodes, as `shoot` keeps them',
     await shot('<div style="position:absolute;left:40px;top:40px;width:80px;height:16px;background:#000"></div>', 'after.png')
 
     expect(await regionsIn(browser, join(dir, 'before.png'), join(dir, 'after.png'))).toEqual({ regions: [{ x: 80, y: 40, width: 40, height: 16 }], grew: 0 })
+
+    // a side missing or a file the browser cannot decode leaves the pair without regions, the run going on
+    await Bun.write(join(dir, 'broken.png'), 'not a png')
+    expect(await regionsOfPair(browser, join(dir, 'before.png'), join(dir, 'gone.png'))).toBeNull()
+    expect(await regionsOfPair(browser, join(dir, 'before.png'), join(dir, 'broken.png'))).toBeNull()
+    expect(await regionsOfPair(browser, join(dir, 'before.png'), join(dir, 'after.png'))).toEqual({ regions: [{ x: 80, y: 40, width: 40, height: 16 }], grew: 0 })
   }
   finally {
     await browser.close()

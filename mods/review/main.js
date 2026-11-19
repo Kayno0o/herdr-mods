@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
-import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, LIST_MAX, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap, viewOf } from "./model.js";
+import { briefTargets, buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, LIST_MAX, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap, viewOf } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
 import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
@@ -264,13 +264,16 @@ export default class Review extends View {
     this.files = files;
     this.notes = notes;
     this.traced = traceMap(files, trace);
+    this.big = false;
     this.rebuild();
   }
 
   rebuild() {
-    this.list = buildList(this.files, this.notes, this.opened, this.groupOpen);
-    // too long for the list whole, the item shows its files one at a time: the one moved to opens
-    this.big = this.list.length > LIST_MAX;
+    // too long for the list whole, the item shows its files one at a time till the next item: the one moved to opens
+    if (!this.big) {
+      this.list = buildList(this.files, this.notes, this.opened, this.groupOpen);
+      this.big = this.list.length > LIST_MAX;
+    }
     if (this.big) this.list = buildList(this.files, this.notes, this.opened, this.groupOpen, true).slice(0, LIST_MAX);
     // each file's header row, or the mechanical group's while it is folded: the rail asks for every file's on each draw
     this.headers = [];
@@ -454,10 +457,13 @@ export default class Review extends View {
       await cli("approve", this.project, item.key, ...(undo ? ["--undo"] : []));
       if (!undo && after) { this.itemKey = after.key; this.commit = null; }
       if (!tilid) return;
-      // Tilid moves ticket by ticket, a feature's each in turn
+      // Tilid moves ticket by ticket, a feature's each in turn, one that fails leaving the others to move
       for (const key of item.feature ? item.feature.tickets.map((t) => t.key) : [item.key]) {
-        const moved = await cli("advance", this.project, key);
-        notify({ title: "Review", body: moved.moved ? `#${moved.number} is now "${moved.status}" in Tilid` : `#${moved.number} stays where it is in Tilid: ${moved.skipped}`, level: moved.moved ? "success" : "warning" });
+        try {
+          const moved = await cli("advance", this.project, key);
+          notify({ title: "Review", body: moved.moved ? `#${moved.number} is now "${moved.status}" in Tilid` : `#${moved.number} stays where it is in Tilid: ${moved.skipped}`, level: moved.moved ? "success" : "warning" });
+        }
+        catch (e) { notify({ title: "Review", body: `${key} did not move in Tilid: ${e.message ?? e}`, level: "error" }); }
       }
     }, cx);
   }
@@ -537,7 +543,8 @@ export default class Review extends View {
   }
 
   // Into a Claude's prompt: pasted for you to finish and send, or sent at once.
-  async deliver(text, send, cx, to = this.claude) {
+  // restore: put the clipboard back after the paste, off when several pastes in a row restore it once
+  async deliver(text, send, cx, to = this.claude, restore = true) {
     if (!to) { notify({ title: "Review", body: "No Claude in this space to hand it to", level: "warning" }); return false; }
     if (send) {
       const r = await hc(["send", to, text]);
@@ -545,7 +552,7 @@ export default class Review extends View {
       return true;
     }
     run("agent.focus", { terminal: to });
-    const held = cx.read_from_clipboard();
+    const held = restore ? cx.read_from_clipboard() : undefined;
     cx.write_to_clipboard(text);
     run("terminal.paste");
     if (held !== undefined) cx.timer.after(RESTORE_CLIPBOARD_MS, (cx) => cx.write_to_clipboard(held));
@@ -557,15 +564,26 @@ export default class Review extends View {
     return claudeFor(this.item?.commits ?? [], agents().map((a) => a.address), this.claude);
   }
 
-  // s: the open notes, as a brief for the Claude to fix them and mark them resolved.
+  // s: the open notes, as a brief for the Claude to fix them and mark them resolved; a feature's go to each ticket's own Claude.
   sendNotes(cx, all = false) {
     if (!this.project) return;
     if (!all && !this.openCount()) { notify({ title: "Review", body: "No open note to send", level: "info", timeout: 2000 }); return; }
-    const to = all ? this.claude : this.handTo();
+    const targets = all ? new Map([[this.claude, []]]) : this.item.feature ? this.featureTargets() : new Map([[this.handTo(), [this.item.key]]]);
     cx.spawn(async (cx) => {
-      try { await this.deliver(await cli("brief", this.project, ...(all ? [] : [this.item.key])), false, cx, to); }
+      const held = targets.size > 1 ? cx.read_from_clipboard() : undefined;
+      try {
+        for (const [to, keys] of targets) await this.deliver(await cli("brief", this.project, ...keys), false, cx, to, targets.size === 1);
+      }
       catch (e) { fail(e); }
+      if (held !== undefined) cx.timer.after(RESTORE_CLIPBOARD_MS, (cx) => cx.write_to_clipboard(held));
     });
+  }
+
+  // The feature's tickets holding open notes, by the Claude that made each.
+  featureTargets() {
+    const keys = [...new Set(this.notes.filter((n) => n.state === "open").map((n) => n.item))];
+    const shasOf = (key) => new Set(this.summary?.items.find((i) => i.key === key)?.commits.map((c) => c.sha) ?? []);
+    return briefTargets(keys, (key) => this.item.commits.filter((c) => shasOf(key).has(c.sha)), agents().map((a) => a.address), this.claude);
   }
 
   askClaude(what, cx) {
@@ -753,10 +771,11 @@ export default class Review extends View {
           .when(i.approved, (e) => e.child(div().text_color(t.ansi2).child(icon("check", 13)))));
     };
     // The shown item lists its files under its row, each a jump to its place in the diff.
-    // a feature's come after its tickets, which sit right under its row
+    // a feature's come after its last ticket, its tickets sitting right under its row
     const withFiles = (i) => {
-      const owner = i.tickets?.length ? null : i.feature && this.summary.items.find((f) => f.key === i.feature)?.tickets.at(-1) === i.key ? i.feature : i.key;
-      const shown = owner === this.itemKey && this.item?.key === owner && this.files.length > 0;
+      const lastOf = (feature) => this.summary.items.find((f) => f.key === feature)?.tickets.at(-1);
+      const shown = this.item?.key === this.itemKey && this.files.length > 0
+        && ((i.key === this.itemKey && !i.tickets?.length) || (i.feature === this.itemKey && lastOf(i.feature) === i.key));
       if (!shown) return [row(i)];
       const here = this.list[this.cursor]?.fi;
       const mechanical = this.files.findIndex((f) => f.mechanical);
@@ -872,6 +891,7 @@ export default class Review extends View {
         .when(open > 0, (e) => e.child(this.button("send", `Send ${plural(open, "note")}`, (cx) => this.sendNotes(cx), t, "Paste the open notes into the Claude that made these commits (s)")))
         .child(div().pl(16).text_size(12).text_color(t.muted).child("Ask Claude"))
         .when(!item.prose, (e) => e.child(this.button("describe", "Describe", (cx) => this.askClaude("describe", cx), t, "Ask the Claude to describe what it changes and why")))
+        .when(Boolean(item.prose) && !this.files.some((f) => f.why || f.mechanical), (e) => e.child(this.button("ask-order", "Order", (cx) => this.askClaude("order", cx), t, "Ask the Claude for the order to read its files in")))
         .when(Boolean(item.ticket || item.feature) && !this.traced.reqs.length, (e) => e.child(this.button("ask-trace", "Trace", (cx) => this.askClaude("trace", cx), t, "Ask the Claude to list the ticket's requirements with the lines doing each")))
         .child(this.button("ask-review", "Review", (cx) => this.askClaude("review", cx), t, "Ask the Claude to read it and note what is wrong, risky or unclear"))
         .child(this.button("ask-shots", "Screens", (cx) => this.askClaude("shots", cx), t, "Ask the Claude for before and after screenshots of the screens it changes"))
@@ -1099,10 +1119,12 @@ export default class Review extends View {
     const pane = (side) => {
       const file = side === "before" ? shot.before : shot.after, at = file && this.shots.get(file);
       const label = side === "before" ? (shot.after ? "Before" : "Before · gone after") : (shot.before ? "After" : "After · new screen");
+      // the boxes are where the after picture has them, which on a page that grew is not where the before one does
+      const boxes = side === "before" && shot.grew ? [] : regions;
       // the caption sits on the picture, both centred in the room
       return v_flex().flex_1().min_w(0).h_full().gap(6).items_center().justify_center()
         .child(h_flex().h(16).gap(6).items_center().text_size(11).font_semibold().text_color(side === "before" ? t.muted : t.foreground).child(label))
-        .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(this.picture(at, regions, { w: room.w - 2, h: room.h - 2 }, view.region ?? null, t))))
+        .when(Boolean(at) && room.w > 0, (e) => e.child(div().rounded(6).overflow_hidden().border_1().border_color(t.border).child(this.picture(at, boxes, { w: room.w - 2, h: room.h - 2 }, view.region ?? null, t))))
         .when(!at, (e) => e.text_color(t.dim).child("No picture"));
     };
     return v_flex().flex_1().min_h(0).px(24).py(16).gap(14)

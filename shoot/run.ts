@@ -13,7 +13,7 @@ import { git } from '../review/git'
 import { findItem, nextShotId } from '../review/inbox'
 import { load, scenarioFile, shotName, shotsDir, update } from '../review/store'
 import { needsShooting, statesOf } from './plan'
-import { regionsIn } from './regions'
+import { regionsOfPair } from './regions'
 import { checkout, repoDir, restore } from './stack'
 import { AppError } from './types'
 
@@ -29,6 +29,7 @@ export interface ShootOptions {
 }
 
 const VIEWPORT = { width: 1440, height: 900 }
+const MASK_COLOUR = '#d4d4d8'
 // How many times a capture starts over when the stack, not the scenario, made it fail.
 const ATTEMPTS = 3
 const STEP_TIMEOUT = 20_000
@@ -126,7 +127,7 @@ async function captureOnce(browser: Browser, preset: Preset, auth: Auth, url: st
   // A failed step still gets its screenshot, which usually shows why.
   try {
     if (!videoDir)
-      await page.screenshot({ path: file, fullPage: entry.fullPage ?? false })
+      await page.screenshot({ path: file, fullPage: entry.fullPage ?? false, mask: entry.mask?.map(selector => page.locator(selector)), maskColor: MASK_COLOUR })
   }
   catch (caught) {
     error ??= (caught as Error).message
@@ -145,7 +146,7 @@ async function captureOnce(browser: Browser, preset: Preset, auth: Auth, url: st
   return { error: error && `${side}: ${firstLine(error)}`, transient }
 }
 
-async function capture(browser: Browser, preset: Preset, auth: Auth, url: string, file: string, entry: ScenarioShot, side: ShotSide): Promise<string | null> {
+export async function capture(browser: Browser, preset: Preset, auth: Auth, url: string, file: string, entry: ScenarioShot, side: ShotSide): Promise<string | null> {
   for (let attempt = 1; ; attempt++) {
     const { error, transient } = await captureOnce(browser, preset, auth, url, file, entry, side)
 
@@ -285,9 +286,9 @@ export async function shoot(project: string, ref: string, options: ShootOptions)
     for (const planned of plan) {
       const [before, after] = SIDES.map(side => join(shotsDir(project), planned.files[side]))
 
-      // a screen one side lacks, or a video, has nothing to compare
-      if (!planned.errors.length && !planned.entry.video && existsSync(before!) && existsSync(after!))
-        planned.diff = await regionsIn(browser, before!, after!)
+      // a failed capture or a video has nothing to compare
+      if (!planned.errors.length && !planned.entry.video)
+        planned.diff = await regionsOfPair(browser, before!, after!) ?? undefined
 
       record(project, item.key, planned, labels)
       recorded.add(planned)

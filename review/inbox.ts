@@ -10,7 +10,7 @@ const NUMBER = /^\d+$/
 export const PATH_LINE = /^(\S+)\s+(\S.*)$/
 
 export function emptyInbox(project: string, tilid: Inbox['tilid'] = null): Inbox {
-  return { version: 1, project, tilid, repos: {}, commits: [], prose: {}, order: {}, notes: [], read: {}, approved: {}, shots: [] }
+  return { version: 1, project, tilid, repos: {}, commits: [], prose: {}, order: {}, trace: {}, notes: [], read: {}, approved: {}, shots: [] }
 }
 
 export interface Item {
@@ -236,7 +236,7 @@ export function markRead(inbox: Inbox, item: string, files: { repo: string, path
     delete inbox.read[item]
 }
 
-interface FileRef { repo: string, path: string }
+export interface FileRef { repo: string, path: string }
 
 // The file of an item a line names, by its path or by `repo:path` where the path alone is ambiguous.
 export function fileNamed<T extends FileRef>(files: T[], path: string): T {
@@ -269,13 +269,20 @@ export function readOrder(text: string, files: FileRef[]): OrderEntry[] {
 // The files in their reading order: the ones it lists, then those it leaves out as they came, then the mechanical ones.
 export function orderFiles<T extends FileRef>(files: T[], order: OrderEntry[]): (T & { why: string | null, mechanical: boolean })[] {
   const at = new Map(order.map((o, i) => [fileKey(o.repo, o.path), { ...o, rank: i }]))
-  const rank = (f: T) => {
+  // group: listed, left out, mechanical; then the order's place or the file's own
+  const groupOf = (o: { mechanical: boolean } | undefined) => {
+    if (!o)
+      return 1
+
+    return o.mechanical ? 2 : 0
+  }
+  const ranked = files.map((f, i) => {
     const o = at.get(fileKey(f.repo, f.path))
 
-    return o ? (o.mechanical ? 2 : 0) * files.length + o.rank : files.length + files.indexOf(f)
-  }
+    return { f, o, group: groupOf(o), place: o?.rank ?? i }
+  })
 
-  return files.toSorted((a, b) => rank(a) - rank(b)).map(f => ({ ...f, why: at.get(fileKey(f.repo, f.path))?.why ?? null, mechanical: at.get(fileKey(f.repo, f.path))?.mechanical ?? false }))
+  return ranked.toSorted((a, b) => a.group - b.group || a.place - b.place).map(({ f, o }) => ({ ...f, why: o?.why ?? null, mechanical: o?.mechanical ?? false }))
 }
 
 export function approve(inbox: Inbox, item: Item, undo = false) {

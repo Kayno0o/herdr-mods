@@ -19,6 +19,8 @@ export interface ScenarioShot {
   video?: boolean
   fullPage?: boolean
   viewport?: { width: number, height: number }
+  // CSS selectors of what changes on every load, a clock or a random id, painted over on both sides so it is not taken for a change
+  mask?: string[]
 }
 
 export interface Scenario {

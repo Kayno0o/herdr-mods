@@ -6,7 +6,7 @@ import { addCommit, syncRepo } from './add'
 import { lineOf, renderView, textAt } from './format'
 import { git } from './git'
 import { markRead } from './inbox'
-import { load } from './store'
+import { load, update } from './store'
 import { makeRepo } from './testing'
 import { summary, view } from './view'
 
@@ -113,6 +113,29 @@ test('sync files the branch\'s unpushed commits the inbox lacks, once', () => {
     expect(syncRepo(other.dir).map(a => a.sha)).toEqual([second, third])
     expect(load('synced')!.commits.map(c => c.sha)).toEqual([first, second, third])
     expect(syncRepo(other.dir)).toEqual([])
+  }
+  finally { other.cleanup() }
+})
+
+test('sync gives older commits their branch, a feature one only to commits no other branch holds', () => {
+  const other = makeRepo('backfilled')
+
+  try {
+    const pushed = other.commit('chore: pushed', { a: '1\n' })
+
+    git(other.dir, ['update-ref', 'refs/remotes/origin/main', pushed])
+    const before = other.commit('fix: before the branch', { a: '2\n' })
+
+    git(other.dir, ['checkout', '-q', '-b', 'feature/groups'])
+    const on = other.commit('feat: on the branch', { a: '3\n' })
+
+    syncRepo(other.dir)
+    update('backfilled', (inbox) => {
+      for (const c of inbox.commits) delete c.branch
+    })
+    syncRepo(other.dir)
+
+    expect(load('backfilled')!.commits.map(c => [c.sha, c.branch])).toEqual([[before, 'main'], [on, 'feature/groups']])
   }
   finally { other.cleanup() }
 })

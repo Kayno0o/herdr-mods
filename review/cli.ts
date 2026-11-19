@@ -8,7 +8,7 @@ import { addCommit, syncRepo } from './add'
 import { configFile, loadConfig, tilidAdvance } from './config'
 import { knownForges } from './forge'
 import { lineOf, renderView, textAt } from './format'
-import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
+import { addNote, approve, brief, dropNotes, fileNamed, fileUnder, findItem, itemsOf, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
@@ -93,15 +93,7 @@ function inboxOf(project: string) {
 }
 
 // A path as given to `note`: `repo:path` when the inbox holds several repos.
-function fileOf(project: string, item: string, path: string) {
-  const shown = view(inboxOf(project), item)
-  const file = shown.files.find(f => f.path === path || `${f.repo}:${f.path}` === path)
-
-  if (!file)
-    throw new Error(`${path} is not in ${shown.title}: ${shown.files.map(f => f.path).join(', ')}`)
-
-  return file
-}
+const fileOf = (project: string, item: string, path: string) => fileNamed(view(inboxOf(project), item).files, path)
 
 const commands: Record<string, () => void | Promise<void>> = {
   add() {
@@ -149,7 +141,8 @@ const commands: Record<string, () => void | Promise<void>> = {
     const line = at?.line ?? (flags.line ? Number(flags.line) : null)
     const text = line === null ? null : textAt(file.patch, side, line)
     // a feature's note is kept by the ticket that wrote its line, whose Claude it is sent to
-    const owner = noteOwner(inboxOf(project!), findItem(inboxOf(project!), item!), file, side, text)
+    const held = inboxOf(project!)
+    const owner = noteOwner(held, findItem(held, item!), file, side, text)
     const note = update(project!, inbox => addNote(inbox, {
       item: owner,
       repo: file.repo,

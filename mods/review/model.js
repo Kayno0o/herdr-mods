@@ -280,6 +280,16 @@ export function claudeFor(commits, live, picked) {
   return commits.findLast((c) => c.terminal && alive.has(c.terminal))?.terminal ?? picked ?? null;
 }
 
+// Where a feature's notes go: each ticket's Claude with the tickets it made, as one brief each.
+export function briefTargets(keys, commitsOf, live, picked) {
+  const to = new Map();
+  for (const key of keys) {
+    const claude = claudeFor(commitsOf(key), live, picked);
+    to.set(claude, [...(to.get(claude) ?? []), key]);
+  }
+  return to;
+}
+
 // How a screenshot of `size` shows in `frame`: fitted whole, or zoomed on `region` with room around it (three times at most), centred on it and kept over the frame; `left` and `top` place the picture in the frame.
 export function viewOf(size, frame, region) {
   const PAD = 32, MAX_ZOOM = 3;
@@ -291,10 +301,13 @@ export function viewOf(size, frame, region) {
   return { scale, w, h, left: place(w, size.w, region.x + region.width / 2), top: place(h, size.h, region.y + region.height / 2) };
 }
 
+const orderAsk = (cli, project, item) => `give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`;
+
 // What the Ask buttons hand a Claude; `cli` is how it runs the review CLI.
 export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,
-  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`,
+  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then ${orderAsk(cli, project, item)}`,
+  order: (cli, project, item) => `Read ${item.title} with \`${cli} show ${project} ${item.key}\`, then ${orderAsk(cli, project, item)}`,
   file: (cli, project, shas) => `File the loose commits ${shas.join(", ")} of the ${project} review inbox under their Tilid tickets: for each, find the ticket it belongs to in Tilid and run \`${cli} file ${project} <sha> "#<number> - [<USE_CASE>] <title>"\`. Leave a commit that belongs to no ticket alone.`,
   trace: (cli, project, item) => `Trace ${item.title} to its requirements, as the review skill says: read the ticket and the spec of the use case it names (a forge issue's checklist when it is no Tilid ticket), read \`${cli} show ${project} ${item.key}\`, then run \`${cli} trace ${project} ${item.key}\` with on stdin one \`- <requirement, in the spec's own words>\` line per requirement, each followed by indented \`<path> <text of a line doing it>\` lines and \`partly: <what is left, in French>\` when it is only partly done. A requirement nothing does gets no line under it.${item.feature ? ` It is a feature: do it for each of its tickets, ${item.feature.tickets.map((t) => t.key).join(", ")}, each ticket's requirements under a \`## #<number>\` line.` : ""}`,
   shots: (cli, project, item) => `Take before and after screenshots of the screens ${item.title} changes, following the review skill: write its scenario, then \`${cli} shoot ${project} ${item.key} --stack <dir>\` on a disposable stack, never mine, and look at every image it takes.`,

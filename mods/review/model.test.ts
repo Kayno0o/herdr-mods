@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, viewOf, WRAP_H, wrapLine } from './model.js'
+import { briefTargets, buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, viewOf, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -123,6 +123,12 @@ test('comments and the Claude an item goes back to', () => {
 
   expect(claudeFor(commits, ['t1', 't3'], 't3')).toBe('t1')
   expect(claudeFor(commits, [], 't3')).toBe('t3')
+})
+
+test('a feature\'s notes go to each ticket\'s own Claude, the tickets one Claude made sharing a brief', () => {
+  const commits = { '#1': [{ terminal: 't1' }], '#2': [{ terminal: 't2' }], '#3': [{ terminal: 't1' }], '#4': [{ terminal: 'gone' }] } as Record<string, { terminal: string }[]>
+
+  expect(briefTargets(['#1', '#2', '#3', '#4'], (k: string) => commits[k]!, ['t1', 't2'], 'picked')).toEqual(new Map([['t1', ['#1', '#3']], ['t2', ['#2']], ['picked', ['#4']]]))
 })
 
 test('a snapshot takes untracked files in and leaves the index alone', () => {

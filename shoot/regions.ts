@@ -1,11 +1,11 @@
 // What differs between a before and an after screenshot, as boxes on the after picture.
 import type { Browser } from 'playwright-core'
 import type { Region } from '../review/types'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 export interface Pixels { width: number, height: number, data: Uint8ClampedArray }
 
-// Self-contained, as the shoot's browser runs it from its source on the pixels it decodes. A pixel differs when a channel moves by more than `threshold`, and an 8px cell when two of its pixels do, so antialiasing and a lone caret pixel stay out; differing cells up to two apart make one box. On a page that grew, a pixel matching the before picture as many pixels higher is what the growth pushed down, not a change. Boxes overlapping or touching then make one, and a page that reflowed is cut down to a dozen, the pairs adding least area merged first.
+// Self-contained, the shoot's browser running it from its source. 8px cells with two pixels differing make boxes, a growth's push-down is matched against the before picture shifted, and touching boxes merge down to a dozen at most.
 export function regionsOf(before: Pixels, after: Pixels, threshold = 32): { regions: Region[], grew: number } {
   const CELL = 8
   const GAP = 2
@@ -135,5 +135,18 @@ export async function regionsIn(browser: Browser, before: string, after: string)
   }
   finally {
     await page.close()
+  }
+}
+
+// A pair's regions, or null when a side is missing or does not decode: a capture the finder cannot read still records.
+export async function regionsOfPair(browser: Browser, before: string, after: string): Promise<{ regions: Region[], grew: number } | null> {
+  if (!existsSync(before) || !existsSync(after))
+    return null
+
+  try {
+    return await regionsIn(browser, before, after)
+  }
+  catch {
+    return null
   }
 }

@@ -137,6 +137,13 @@ describe('reading order', () => {
     ])
     expect(orderFiles(files, []).map(f => f.path)).toEqual(['a.ts', 'b.ts', 'a.ts', 'lock.json'])
   })
+
+  test('keeps the listed files first when the order names files this view lacks, as one commit shown alone does', () => {
+    const files = [{ repo: 'app', path: 'a.ts' }, { repo: 'app', path: 'b.ts' }]
+    const order = ['q.ts', 'r.ts', 's.ts', 'b.ts'].map(path => ({ repo: 'app', path, why: 'x', mechanical: false }))
+
+    expect(orderFiles(files, order).map(f => f.path)).toEqual(['b.ts', 'a.ts'])
+  })
 })
 
 describe('features', () => {

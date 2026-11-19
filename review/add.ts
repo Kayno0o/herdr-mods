@@ -13,11 +13,15 @@ const RECORD = '\x1E'
 // The branch checked out in `path`, null when detached.
 const currentBranch = (path: string) => git(path, ['symbolic-ref', '--short', '-q', 'HEAD'], { ok: [0, 1] }).trim() || null
 
-// The branch an older commit was made on, as far as the branches holding it tell: a feature branch first, else the one checked out.
+// The branch an older commit was made on, as far as the branches holding it tell: a feature branch when no other holds it, as one a feature branched from is made before it, else the one checked out among the others.
 function branchOf(path: string, sha: string, current: string | null): string | null {
   const holding = git(path, ['branch', '--contains', sha, '--format=%(refname:short)'], { ok: [0, 129] }).split('\n').filter(Boolean)
+  const others = holding.filter(b => !FEATURE_BRANCH.test(b))
 
-  return holding.find(b => FEATURE_BRANCH.test(b)) ?? (current && holding.includes(current) ? current : holding[0] ?? null)
+  if (!others.length && holding.length)
+    return holding[0]!
+
+  return current && others.includes(current) ? current : others[0] ?? null
 }
 
 // A `fixup!` commit names no ticket itself: it takes the tickets of the commit it fixes, looked up in the inbox, else in the history before it.

@@ -5,13 +5,15 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import { chromium } from 'playwright-core'
 import { addCommit } from '../review/add'
 import { git } from '../review/git'
 import { emptyInbox } from '../review/inbox'
 import { load, projectDir, scenarioFile, shotsDir } from '../review/store'
 import { makeRepo } from '../review/testing'
 import { needsShooting, statesOf } from './plan'
-import { record, shoot } from './run'
+import { regionsIn } from './regions'
+import { capture, record, shoot } from './run'
 import { checkout, repoDir, restore } from './stack'
 
 const commit = (sha: string, repo: string, parent: string): Commit => ({ sha, repo, ts: 0, parents: [parent], author: 'a', subject: sha, body: '', tickets: [], filed: false, patchId: null, copies: [], terminal: null })
@@ -129,5 +131,28 @@ test('takes the project\'s preset and its .env from the config folder', async ()
     repo.cleanup()
     rmSync(reviews, { recursive: true, force: true })
     rmSync(config, { recursive: true, force: true })
+  }
+})
+
+test('a shot\'s masked parts, a clock or a random id, come out the same on both sides and are not boxed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'review-mask-'))
+  let hits = 0
+  const server = Bun.serve({ port: 0, fetch: () => new Response(`<body style="margin:0;background:#fff"><p id="clock" style="font:40px sans-serif">${++hits}:0${hits}</p></body>`, { headers: { 'content-type': 'text/html' } }) })
+  const browser = await chromium.launch()
+  const preset = { ready: () => Promise.resolve(), login: () => Promise.resolve(), hooks: [], settle: 0, url: () => '' } as Preset
+  const take = async (side: 'before' | 'after', mask?: string[]) => {
+    expect(await capture(browser, preset, { cookies: [], origins: [] }, server.url.origin, join(dir, `${side}.png`), { label: 'clock', route: '/', mask }, side)).toBeNull()
+
+    return join(dir, `${side}.png`)
+  }
+
+  try {
+    expect((await regionsIn(browser, await take('before'), await take('after'))).regions.length).toBeGreaterThan(0)
+    expect((await regionsIn(browser, await take('before', ['#clock']), await take('after', ['#clock']))).regions).toEqual([])
+  }
+  finally {
+    await browser.close()
+    server.stop()
+    rmSync(dir, { recursive: true, force: true })
   }
 })

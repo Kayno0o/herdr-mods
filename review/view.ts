@@ -1,7 +1,7 @@
 import type { Advance } from './config'
-import type { Item } from './inbox'
+import type { FileRef, Item } from './inbox'
 // The read side: what the Review tab and an agent are shown of an inbox, with each item's diff computed from git.
-import type { Commit, Inbox, Note, Requirement, Shot, Ticket } from './types'
+import type { Commit, Inbox, Note, Requirement, Shot, Side, Ticket } from './types'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -223,8 +223,6 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
   }
 }
 
-interface FileRef { repo: string, path: string }
-
 // What reading files of an item marks: the files themselves, and in a feature each ticket's own diff of them, its final state read covering theirs.
 export function readsOf(inbox: Inbox, ref: string, files: FileRef[]): { item: string, files: (FileRef & { digest: string })[] }[] {
   const item = findItem(inbox, ref)
@@ -235,7 +233,7 @@ export function readsOf(inbox: Inbox, ref: string, files: FileRef[]): { item: st
 }
 
 // The ticket a note written on a feature goes to: the latest one whose commits wrote its line, else the latest touching its file.
-export function noteOwner(inbox: Inbox, item: Item, file: FileRef, side: 'old' | 'new', text: string | null): string {
+export function noteOwner(inbox: Inbox, item: Item, file: FileRef, side: Side, text: string | null): string {
   if (!item.feature)
     return item.key
 
