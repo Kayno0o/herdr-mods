@@ -45,6 +45,24 @@ EOF
 
 Order the files the way a reader follows the change: where it enters (a route, a page, a command), then the logic it reaches, then what it stores, then the tests. The words after a path say why that file changed, in a few words and the user's language, never what its lines say. `mechanical` marks a file nothing can go wrong in (a rename, i18n keys, formatting, a lockfile, generated code): the tab folds them into one group read in one go, so never mark a file holding logic. A path is `repo:path` when two repos hold it; a file left out comes after the listed ones.
 
+## Tracing
+
+When asked to trace an item, list what its ticket asked for, each requirement with the lines doing it, written again in full whenever it changes:
+
+```bash
+review trace <project> <item> <<'EOF'
+- Une facture payée passe au statut {Réglée}
+  src/Service/InvoiceService.php return InvoiceStatus::Paid;
+  templates/invoice/show.html.twig invoice.status.paid
+- Le montant restant dû s'affiche sur la fiche
+  templates/invoice/show.html.twig invoice.amountDue
+  partly: le cas d'un avoir n'est pas géré
+- Un e-mail part au client à la date du paiement
+EOF
+```
+
+The requirements come from the spec, not the diff: the ticket and the use case it names, or a forge issue's checklist, in their own words, one per thing a tester would check. Under each, an indented `<path> <text of a line>` per hunk doing it, the text found as `note --at` finds it; `partly:` says what is left. A requirement no line does gets nothing under it: the tab shows it missing, which is the point. `## #13859` before a group of requirements says which ticket they come from, in an item holding several.
+
 ## Notes
 
 ```bash

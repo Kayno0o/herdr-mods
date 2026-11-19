@@ -138,3 +138,21 @@ test('the order command puts an item\'s files in the order given, in its net dif
   }
   finally { other.cleanup() }
 })
+
+test('the trace command keeps an item\'s requirements with the lines doing them, listed above its diff', () => {
+  const other = makeRepo('traced')
+
+  try {
+    other.commit('chore: base', { 'a.ts': 'const label = \'one\'\n' })
+    addCommit(other.dir, other.commit('feat: french\n\n#8 - [SCREEN] Eight', { 'a.ts': 'const label = \'un\'\n' }))
+    const run = (stdin: string) => Bun.spawnSync(['bun', join(import.meta.dir, 'cli.ts'), 'trace', 'traced', '8'], { stdin: Buffer.from(stdin), stdout: 'pipe', stderr: 'pipe', env: process.env })
+
+    expect(run('- Le libellé est en français\n  a.ts label = \'un\'\n- Le libellé est en gras\n').stderr.toString()).toBe('')
+    expect(run('- Faux\n  a.ts nowhere\n').stderr.toString()).toContain('no line of a.ts holds "nowhere"')
+    const shown = view(load('traced')!, '8')
+
+    expect(shown.trace.map(r => [r.text, r.anchors.map(a => [a.path, a.side, a.line])])).toEqual([['Le libellé est en français', [['a.ts', 'new', 1]]], ['Le libellé est en gras', []]])
+    expect(renderView(shown)).toContain('Requirements\n  covered  Le libellé est en français  a.ts:1\n  missing  Le libellé est en gras\n')
+  }
+  finally { other.cleanup() }
+})

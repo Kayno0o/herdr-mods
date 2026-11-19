@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, WRAP_H, wrapLine } from './model.js'
+import { buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -172,6 +172,55 @@ describe('the mechanical group', () => {
     expect(fileJump(folded, folded.length - 1, 1, 3)).toBe(-1)
     expect(fileJump(open, open.findIndex((e: Entry) => e.kind === 'group'), 1, 3)).toBe(1)
     expect(fileJump(folded, folded.length - 1, -1, 3)).toBe(0)
+  })
+})
+
+describe('the trace', () => {
+  const TWO = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1,2 +1,2 @@
+-const label = 'one'
++const label = 'un'
+ keep
+@@ -10,2 +10,2 @@
+-const size = 1
++const size = 2
+ keep
+`
+  const file = (path: string, mechanical = false) => ({ path, repo: 'r', patch: TWO, read: false, binary: false, mechanical })
+  const anchor = (path: string, line: number, text: string, side = 'new') => ({ repo: 'r', path, side, line, text })
+  const trace = [
+    { text: 'Labels in French', ticket: null, partly: null, anchors: [anchor('a.ts', 1, 'const label = \'un\''), anchor('b.ts', 1, 'const label = \'un\'')] },
+    { text: 'Sizes grow', ticket: null, partly: 'the max is not set', anchors: [anchor('a.ts', 10, 'const size = 2')] },
+    { text: 'Errors are logged', ticket: null, partly: null, anchors: [] },
+    { text: 'Old one', ticket: null, partly: null, anchors: [anchor('a.ts', 4, 'gone since')] },
+  ]
+
+  test('gives each requirement its status and the hunks doing it, found by their line or their text as a note is', () => {
+    const { reqs } = traceMap([file('a.ts'), file('b.ts')], trace)
+
+    expect(reqs.map((r: { status: string, hunks: unknown }) => [r.status, r.hunks])).toEqual([
+      ['covered', [{ fi: 0, ri: 0 }, { fi: 1, ri: 0 }]],
+      ['partly', [{ fi: 0, ri: 3 }]],
+      ['missing', []],
+      ['gone', []],
+    ])
+  })
+
+  test('tags each hunk with the requirements it does, and lists the hunks doing none outside the mechanical files', () => {
+    const { tags, outside } = traceMap([file('a.ts'), file('b.ts'), file('lock.json', true)], trace)
+
+    expect([...tags]).toEqual([['0:0', [0]], ['0:3', [1]], ['1:0', [0]]])
+    expect(outside).toEqual([{ fi: 1, ri: 3 }])
+  })
+
+  test('says nothing is outside an item with no trace', () => {
+    expect(traceMap([file('a.ts')], []).outside).toEqual([])
+  })
+
+  test('each row of a file knows its place among the file\'s rows', () => {
+    expect(buildList([file('a.ts')], []).filter((e: Entry) => e.kind !== 'file').map((e: Entry & { ri?: number }) => e.ri)).toEqual([0, 1, 2, 3, 4, 5])
   })
 })
 

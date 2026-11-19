@@ -1,7 +1,7 @@
 import type { Advance } from './config'
 import type { Item } from './inbox'
 // The read side: what the Review tab and an agent are shown of an inbox, with each item's diff computed from git.
-import type { Commit, Inbox, Note, Shot, Ticket } from './types'
+import type { Commit, Inbox, Note, Requirement, Shot, Ticket } from './types'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -168,6 +168,7 @@ export interface ItemView {
   commits: (Pick<Commit, 'sha' | 'repo' | 'ts' | 'subject' | 'author' | 'copies' | 'terminal'>)[]
   files: FileView[]
   notes: Note[]
+  trace: Requirement[]
   // with absolute paths
   shots: Shot[]
 }
@@ -199,6 +200,7 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
       return { ...f, digest: digest(f.patch), read: net.has(key) && read[key] === net.get(key) }
     }),
     notes: inbox.notes.filter(n => n.item === item.key),
+    trace: inbox.trace?.[item.key] ?? [],
     shots: inbox.shots.filter(s => s.item === item.key).map(s => ({ ...s, before: s.before && join(shotsDir(inbox.project), s.before), after: s.after && join(shotsDir(inbox.project), s.after) })),
   }
 }

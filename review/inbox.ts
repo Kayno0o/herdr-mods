@@ -5,7 +5,9 @@ import { autosquashTarget, ticketKey, ticketLine } from './tickets'
 
 export const NOTE_STATES: NoteState[] = ['open', 'resolved', 'rejected']
 const NUMBER = /^\d+$/
-const ORDER_LINE = /^(\S+)\s+(\S.*)$/
+
+// `<path> <rest>`, as the order and trace commands read their lines
+export const PATH_LINE = /^(\S+)\s+(\S.*)$/
 
 export function emptyInbox(project: string, tilid: Inbox['tilid'] = null): Inbox {
   return { version: 1, project, tilid, repos: {}, commits: [], prose: {}, order: {}, notes: [], read: {}, approved: {}, shots: [] }
@@ -205,21 +207,26 @@ export function markRead(inbox: Inbox, item: string, files: { repo: string, path
 
 interface FileRef { repo: string, path: string }
 
+// The file of an item a line names, by its path or by `repo:path` where the path alone is ambiguous.
+export function fileNamed<T extends FileRef>(files: T[], path: string): T {
+  const found = files.filter(f => f.path === path || fileKey(f.repo, f.path) === path)
+
+  if (!found.length)
+    throw new Error(`${path} is not in this item`)
+
+  if (found.length > 1)
+    throw new Error(`${path} names several files: ${found.map(f => fileKey(f.repo, f.path)).join(', ')}`)
+
+  return found[0]!
+}
+
 // An item's reading order from one line per file, `<path> <why it changed>` or `<path> mechanical`, a path being `repo:path` where it alone is ambiguous.
 export function readOrder(text: string, files: FileRef[]): OrderEntry[] {
   const order: OrderEntry[] = []
 
   for (const line of text.split('\n').map(l => l.trim()).filter(Boolean)) {
-    const [, path, why] = ORDER_LINE.exec(line) ?? [null, line, '']
-    const found = files.filter(f => f.path === path || fileKey(f.repo, f.path) === path)
-
-    if (!found.length)
-      throw new Error(`${path} is not in this item`)
-
-    if (found.length > 1)
-      throw new Error(`${path} names several files: ${found.map(f => fileKey(f.repo, f.path)).join(', ')}`)
-
-    const { repo, path: at } = found[0]!
+    const [, path, why] = PATH_LINE.exec(line) ?? [null, line, '']
+    const { repo, path: at } = fileNamed(files, path!)
 
     if (!order.some(o => o.repo === repo && o.path === at))
       order.push({ repo, path: at, why: why === 'mechanical' ? null : why!.trim() || null, mechanical: why === 'mechanical' })

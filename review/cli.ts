@@ -12,6 +12,7 @@ import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markR
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
+import { readTrace } from './trace'
 import { summary, view } from './view'
 
 export const CLI = `bun ${import.meta.path}`
@@ -33,6 +34,7 @@ const HELP = `review <command>: the per-project review inboxes (~/.local/share/h
   advance <project> <ticket>                          move it from tilid.reviewStatus to tilid.afterReviewStatus in Tilid, as ${configFile()} names them
   prose <project> <item> <text...>                    what the item does, in a few sentences
   order <project> <item> < lines                      the order to read its files in, one line each: <path> <why it changed>, or <path> mechanical
+  trace <project> <item> < lines                      its requirements and the lines doing each: "- <requirement>", then indented "<path> <text of a line>" or "partly: <what is left>"; "## #n" before a ticket's own
   file <project> <sha> <"#n - [SCREEN] title">... | none   file a commit under tickets
   brief <project> [<item>...]                         the open notes as a prompt for a Claude
   shot <project> <item> --label <l> [--route <r>] [--before <png>] [--after <png>]   file screenshots taken by hand
@@ -235,6 +237,16 @@ const commands: Record<string, () => void | Promise<void>> = {
       (inbox.order ??= {})[shown.key] = order
     })
     print(order, `order of ${shown.key}: ${order.length} of ${shown.files.length} files, ${order.filter(o => o.mechanical).length} mechanical`)
+  },
+  async trace() {
+    const [project, item] = need(2, '<project> <item> < "- <requirement>" lines')
+    const shown = view(inboxOf(project!), item!)
+    const trace = readTrace(await Bun.stdin.text(), shown.files)
+
+    update(project!, (inbox) => {
+      (inbox.trace ??= {})[shown.key] = trace
+    })
+    print(trace, `trace of ${shown.key}: ${trace.length} requirements, ${trace.filter(r => !r.anchors.length).length} missing, ${trace.filter(r => r.partly).length} partly`)
   },
   file() {
     const [project, sha, ...lines] = need(3, '<project> <sha> <"#n - [SCREEN] title">... | none')

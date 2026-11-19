@@ -1,11 +1,11 @@
 // The Review tab of a space (Ctrl+Shift+R, or a commit's ticket from Changes). Inbox: the project's tickets and loose commits still to review, each one's net diff side by side with its notes under their lines, read file by file, approved, its notes handed back to a Claude. Working: what a Claude changed since you last looked, a line's comment pasted into it.
 // The layout's copy only listens for review.open and review.request (Changes' ask, its props in shared REQUEST); the view is a tab whose only pane is this mod, reused while the space has one.
-// Keys, while the tab has the keyboard: r read and next (unread again on a read file), n next open note, c comment, a approve, s send the notes, j/k move, J/K next and previous file, ] and [ next and previous item, p the screens, enter open, v/x/d resolve, reject, delete the picked note; in the screens, ←/→ (h/l) move, b flips before and after, m side by side.
+// Keys, while the tab has the keyboard: r read and next (unread again on a read file), n next open note, c comment, a approve, s send the notes, j/k move, J/K next and previous file, ] and [ next and previous item, p the screens, enter open (on a hunk, the next one of the requirement picked in the header), v/x/d resolve, reject, delete the picked note; in the screens, ←/→ (h/l) move, b flips before and after, m side by side.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { agents, panes, spaces, focused, exec, hc, home, appHome, readTextFile, writeTextFile, watchFolder, theme, settings, props, shared, setShared, closeOverlay, nextCommand, run, notify } from "herdr";
-import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder } from "./model.js";
+import { buildList, heightOf, columnsOf, wrapLine, singleSide, ROW_H, WRAP_H, CODE_SIZE, nextUnread, nextOpenNote, noteLines, splitFiles, daysLabel, commentText, SNAPSHOT, claudeFor, PROMPTS, tildePath, fileJump, railGroups, railOrder, traceMap } from "./model.js";
 import { BUN, CLI, REVIEWS } from "./paths.js";
 import { PICKS, folderOf, pickRepo, repoName } from "./repos.js";
 
@@ -91,6 +91,8 @@ export default class Review extends View {
     this.seen = {}; this.now = null; this.base = "HEAD"; this.statusSeen = null; this.workFiles = [];
     // The diff shown
     this.files = []; this.notes = []; this.list = []; this.heights = []; this.opened = new Set(); this.groupOpen = false; this.cursor = 0;
+    // the item's requirements on its hunks, and the one picked with the hunk it is on (`k` a requirement's index, or "outside")
+    this.traced = traceMap([], []); this.reqPick = null;
     // top: the first row the list drew, whose file the diff names above it
     this.top = 0;
     // diffW: the diff's width; pressX: where the last press in it landed, since a list's click only names the row
@@ -217,12 +219,12 @@ export default class Review extends View {
 
   showItem(key, item) {
     const same = key && key === this.item?.key;
-    if (!same) { this.opened = new Set(); this.groupOpen = false; this.cursor = 0; this.target = null; this.picked = null; this.shot = null; this.revealRail = true; }
+    if (!same) { this.opened = new Set(); this.groupOpen = false; this.reqPick = null; this.cursor = 0; this.target = null; this.picked = null; this.shot = null; this.revealRail = true; }
     this.itemKey = key;
     this.item = item;
     if (!item) { this.show([]); return; }
     if (item.commit === null) this.commit = null;
-    this.show(item.files, item.notes.filter((n) => n.path));
+    this.show(item.files, item.notes.filter((n) => n.path), item.trace ?? []);
     if (!same) this.scroll.scroll_to_item(0);
   }
 
@@ -256,9 +258,10 @@ export default class Review extends View {
     });
   }
 
-  show(files, notes = []) {
+  show(files, notes = [], trace = []) {
     this.files = files;
     this.notes = notes;
+    this.traced = traceMap(files, trace);
     this.rebuild();
   }
 
@@ -316,6 +319,34 @@ export default class Review extends View {
     this.rebuild(); this.tally(); cx.notify();
     const key = this.item.key;
     this.write(() => cli("read", this.project, key, ...files.map((f) => `${f.repo}:${f.path}`)), cx);
+  }
+
+  hunksOf(k) {
+    return k === "outside" ? this.traced.outside : this.traced.reqs[k]?.hunks ?? [];
+  }
+
+  // A requirement of the header, or the hunks outside the ticket: picked on its first hunk, then on the next one each time again.
+  pickReq(k, cx) {
+    const hunks = this.hunksOf(k);
+    if (!hunks.length) return;
+    const n = this.reqPick?.k === k ? (this.reqPick.n + 1) % hunks.length : 0;
+    this.reqPick = { k, n }; this.shot = null; this.h.focus();
+    const { fi, ri } = hunks[n], file = this.files[fi];
+    if (file.mechanical) this.groupOpen = true;
+    if (file.read) this.opened.add(fi);
+    this.rebuild();
+    this.moveTo(this.list.findIndex((e) => e.fi === fi && e.ri === ri), cx, "top", true);
+  }
+
+  // A click or enter on a hunk picks there what it does; on a hunk of the picked requirement, it goes on to its next one.
+  stepHunk(e, cx) {
+    const here = (h) => h.fi === e.fi && h.ri === e.ri;
+    const ks = [...this.traced.tags.get(`${e.fi}:${e.ri}`) ?? [], ...this.traced.outside.some(here) ? ["outside"] : []];
+    if (!ks.length) return;
+    const k = ks.includes(this.reqPick?.k) ? this.reqPick.k : ks[0], again = this.reqPick?.k === k;
+    this.reqPick = { k, n: this.hunksOf(k).findIndex(here) };
+    if (again) this.pickReq(k, cx);
+    else cx.notify();
   }
 
   // Going up, a line is brought in two rows below the top, where the file name kept above the diff does not hide it.
@@ -555,7 +586,7 @@ export default class Review extends View {
 
   setTab(tab, cx) {
     if (this.tab === tab) return;
-    this.tab = tab; this.target = null; this.picked = null; this.shot = null; this.cursor = 0; this.opened = new Set(); this.groupOpen = false;
+    this.tab = tab; this.target = null; this.picked = null; this.shot = null; this.cursor = 0; this.opened = new Set(); this.groupOpen = false; this.reqPick = null;
 
     this.reload(cx);
   }
@@ -574,6 +605,7 @@ export default class Review extends View {
       if (this.target) this.closeComposer(cx);
       else if (this.shot) { this.shot = null; cx.notify(); }
       else if (this.picked) { this.picked = null; cx.notify(); }
+      else if (this.reqPick) { this.reqPick = null; cx.notify(); }
       return;
     }
     if (!this.h.is_focused()) return;
@@ -624,6 +656,7 @@ export default class Review extends View {
     if (e.kind === "note") { this.pickNote(e.note.id, cx); return; }
     if (e.kind === "pair") { this.compose(i, cx); return; }
     this.h.focus(); cx.notify();
+    if (e.kind === "hunk") this.stepHunk(e, cx);
   }
 
   button(id, label, onClick, t, tip = null, kind = "plain") {
@@ -759,6 +792,7 @@ export default class Review extends View {
         .when(Boolean(tilid), (e) => e.child(this.button("tilid", h_flex().gap(4).items_center().child("Tilid").child(icon("arrow-up-right", 12)), (cx) => cx.open_url(tilid), t, "Open the ticket in Tilid", "ghost"))))
       // a long description scrolls rather than pushing the diff down
       .when(Boolean(item.prose), (e) => e.child(div().id("prose").max_h(76).overflow_y_scrollbar().text_size(13).text_color(t.muted).child(item.prose)))
+      .when(this.traced.reqs.length > 0, (e) => e.child(this.requirements(t)))
       .children(loose.map((n) => h_flex().id(`item-note-${n.id}`).gap(8).px(12).py(8).rounded(8).cursor_pointer().bg(this.noteColour(n, t) + "14").border_1().border_color(this.noteColour(n, t) + "47")
         .on_click((_e, cx) => this.pickNote(n.id, cx))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(`${n.author} · ${n.state}`))
@@ -795,6 +829,7 @@ export default class Review extends View {
         .when(open > 0, (e) => e.child(this.button("send", `Send ${plural(open, "note")}`, (cx) => this.sendNotes(cx), t, "Paste the open notes into the Claude that made these commits (s)")))
         .child(div().pl(16).text_size(12).text_color(t.muted).child("Ask Claude"))
         .when(!item.prose, (e) => e.child(this.button("describe", "Describe", (cx) => this.askClaude("describe", cx), t, "Ask the Claude to describe what it changes and why")))
+        .when(Boolean(item.ticket) && !this.traced.reqs.length, (e) => e.child(this.button("ask-trace", "Trace", (cx) => this.askClaude("trace", cx), t, "Ask the Claude to list the ticket's requirements with the lines doing each")))
         .child(this.button("ask-review", "Review", (cx) => this.askClaude("review", cx), t, "Ask the Claude to read it and note what is wrong, risky or unclear"))
         .child(this.button("ask-shots", "Screens", (cx) => this.askClaude("shots", cx), t, "Ask the Claude for before and after screenshots of the screens it changes"))
         .child(div().flex_1())
@@ -802,6 +837,38 @@ export default class Review extends View {
           .child(div().text_color(t.ansi2).child(`+${added}`)).child(div().text_color(t.ansi1).child(`−${removed}`))
           .child(div().child(`${read}/${plural(files.length, "file")} read`))))
       .when(!item.exact, (e) => e.child(div().text_size(11.5).text_color(t.ansi3).child("These commits do not apply one after the other, so each file shows as it was before the first and after the last.")));
+  }
+
+  // A requirement names its ticket only in an item holding others.
+  reqLabel(r) {
+    return r.ticket && r.ticket !== this.item?.ticket?.number ? `#${r.ticket} ${r.text}` : r.text;
+  }
+
+  // The ticket's requirements, each a jump through the hunks doing it, then the hunks doing none of them.
+  requirements(t) {
+    const { reqs, outside } = this.traced, pick = this.reqPick, label = (r) => this.reqLabel(r);
+    const colours = { covered: t.ansi2, partly: t.ansi3, missing: t.ansi1, gone: t.dim };
+    const tips = { covered: "Done by the lines shown", partly: "Partly done", missing: "No line does it", gone: "The lines that did it are gone from the diff" };
+    const row = (k, colour, label, extra, status, tip) => {
+      const hunks = this.hunksOf(k), on = pick?.k === k;
+      const count = !hunks.length ? "" : on ? `${pick.n + 1}/${hunks.length}` : plural(hunks.length, "hunk");
+      return h_flex().id(`req-${k}`).h(28).px(10).gap(10).items_center().rounded(6).text_size(12.5).tooltip(tip)
+        .when(on, (e) => e.bg(t.selected)).when(hunks.length > 0, (e) => e.cursor_pointer().hover((s) => s.bg(on ? t.selected : t.hover)).on_click((_e, cx) => this.pickReq(k, cx)))
+        .child(div().size(8).flex_none().rounded(4).bg(colour))
+        .child(h_flex().flex_1().min_w(0).items_baseline().overflow_hidden().whitespace_nowrap()
+          .child(div().flex_none().text_color(status === "missing" || status === "gone" ? t.muted : t.foreground).child(label))
+          .when(Boolean(extra), (x) => x.child(div().pl(10).min_w(0).truncate().text_color(t.muted).child(extra))))
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(count))
+        .child(div().w(52).flex_none().text_size(11.5).text_color(colour).child(status));
+    };
+    const covered = reqs.filter((r) => r.status === "covered").length;
+    return v_flex().gap(4)
+      .child(h_flex().gap(8).items_baseline().text_size(11.5)
+        .child(div().font_semibold().text_color(t.muted).child("Requirements"))
+        .child(div().text_color(t.dim).child(`${covered}/${reqs.length} covered`)))
+      .child(v_flex().id("trace").max_h(150).overflow_y_scrollbar()
+        .children(reqs.map((r, k) => row(k, colours[r.status], label(r), r.partly && `left: ${r.partly}`, r.status, r.partly ? `${r.text}\nLeft: ${r.partly}` : `${r.text}\n${tips[r.status]}`)))
+        .when(outside.length > 0, (e) => e.child(row("outside", t.ansi5, "Outside the ticket", null, "", "Hunks doing none of its requirements, the mechanical files left out"))));
   }
 
   noteColour(n, t) {
@@ -860,7 +927,15 @@ export default class Review extends View {
             .child(this.tick(all, 14, t)).child(`${e.read}/${e.count} read`)));
     }
     if (e.kind === "hunk") {
-      return wrap.bg(t.chrome).text_color(t.dim).font_family(MONO()).text_size(11.5).child(div().pl(20).truncate().child(`@@ ${e.old} → ${e.next}${e.text ? `   ${e.text}` : ""}`));
+      const here = (h) => h.fi === e.fi && h.ri === e.ri;
+      const tags = this.traced.tags.get(`${e.fi}:${e.ri}`) ?? [], outside = !tags.length && this.traced.outside.some(here);
+      const tag = (k, colour, label, tip) => div().flex_none().max_w(280).h(20).px(7).flex().items_center().rounded(5).text_size(11.5)
+        .bg(colour + (this.reqPick?.k === k ? "40" : "1f")).text_color(colour).tooltip(tip).child(div().truncate().child(label));
+      return wrap.bg(t.chrome).text_color(t.dim).text_size(11.5)
+        .child(h_flex().flex_1().min_w(0).pl(20).pr(14 + SCROLLBAR_W).gap(6).items_center()
+          .child(div().flex_1().min_w(0).truncate().font_family(MONO()).child(`@@ ${e.old} → ${e.next}${e.text ? `   ${e.text}` : ""}`))
+          .children(tags.map((k) => tag(k, t.accent, this.reqLabel(this.traced.reqs[k]), this.traced.reqs[k].text)))
+          .when(outside, (x) => x.child(tag("outside", t.ansi5, "Outside the ticket", "This hunk does none of the ticket's requirements"))));
     }
     if (e.kind === "meta") return wrap.text_color(t.dim).child(div().pl(20).child(e.text));
     if (e.kind === "note") {
@@ -1060,7 +1135,8 @@ export default class Review extends View {
     if (this.picked) return [["v", "resolve"], ["x", "reject"], ["d", "delete"], ["n", "next note"], ["esc", "close"]];
     const move = [["j k", "line"], ["J K", "file"]];
     if (this.tab === "working") return [...move, ["enter", "open"], ["c", "comment"]];
-    return [["r", "read, next"], ...move, ["[ ]", "item"], ["n", "next note"], ["c", "comment"], ...this.item?.shots.length ? [["p", "screens"]] : [], ["a", "approve"], ["s", "send notes"]];
+    const next = this.reqPick && this.list[this.cursor]?.kind === "hunk" ? [["enter", "next hunk"]] : [];
+    return [["r", "read, next"], ...move, ...next, ["[ ]", "item"], ["n", "next note"], ["c", "comment"], ...this.item?.shots.length ? [["p", "screens"]] : [], ["a", "approve"], ["s", "send notes"]];
   }
 
   render(_cx) {

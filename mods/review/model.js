@@ -136,11 +136,35 @@ export function buildList(files, notes, open = new Set(), groupOpen = false) {
     const rows = sideRows(file.patch), placed = placeNotes(rows, own);
     for (const { note, moved } of placed.get(-1) ?? []) list.push({ kind: "note", fi, note, moved });
     rows.forEach((row, i) => {
-      list.push({ ...row, fi });
+      list.push({ ...row, fi, ri: i });
       for (const { note, moved } of placed.get(i) ?? []) list.push({ kind: "note", fi, note, moved });
     });
   });
   return list;
+}
+
+// An item's requirements against its diff: each with its status and the hunks doing it (`ri` a hunk's row in its file's sideRows), each hunk's requirements under `fi:ri`, and the hunks doing none, mechanical files left out. An anchor follows its line as a note does; a requirement whose every anchor lost its line is gone.
+export function traceMap(files, trace) {
+  const tags = new Map(), outside = [];
+  const reqs = trace.map((r) => ({ ...r, hunks: [] }));
+  files.forEach((file, fi) => {
+    const own = reqs.flatMap((r, k) => r.anchors.filter((a) => a.path === file.path && (!a.repo || !file.repo || a.repo === file.repo)).map((a) => ({ ...a, k })));
+    const rows = sideRows(file.patch);
+    for (const [at, placed] of placeNotes(rows, own)) {
+      if (at < 0) continue;
+      const ri = rows.findLastIndex((row, i) => i <= at && row.kind === "hunk");
+      const key = `${fi}:${ri}`;
+      for (const { note } of placed) {
+        const req = reqs[note.k];
+        if (!req.hunks.some((h) => h.fi === fi && h.ri === ri)) req.hunks.push({ fi, ri });
+        if (!(tags.get(key) ?? []).includes(note.k)) tags.set(key, [...tags.get(key) ?? [], note.k]);
+      }
+    }
+    if (!trace.length || file.mechanical) return;
+    rows.forEach((row, ri) => { if (row.kind === "hunk" && !tags.has(`${fi}:${ri}`)) outside.push({ fi, ri }); });
+  });
+  for (const r of reqs) r.status = r.hunks.length ? (r.partly ? "partly" : "covered") : r.anchors.length ? "gone" : "missing";
+  return { reqs, tags, outside };
 }
 
 const linesOf = (side, cols) => side ? Math.max(1, Math.ceil(side.text.length / cols)) : 1;
@@ -252,5 +276,6 @@ export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,
   describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`,
   file: (cli, project, shas) => `File the loose commits ${shas.join(", ")} of the ${project} review inbox under their Tilid tickets: for each, find the ticket it belongs to in Tilid and run \`${cli} file ${project} <sha> "#<number> - [<USE_CASE>] <title>"\`. Leave a commit that belongs to no ticket alone.`,
+  trace: (cli, project, item) => `Trace ${item.title} to its requirements, as the review skill says: read the ticket and the spec of the use case it names (a forge issue's checklist when it is no Tilid ticket), read \`${cli} show ${project} ${item.key}\`, then run \`${cli} trace ${project} ${item.key}\` with on stdin one \`- <requirement, in the spec's own words>\` line per requirement, each followed by indented \`<path> <text of a line doing it>\` lines and \`partly: <what is left, in French>\` when it is only partly done. A requirement nothing does gets no line under it.`,
   shots: (cli, project, item) => `Take before and after screenshots of the screens ${item.title} changes, following the review skill: write its scenario, then \`${cli} shoot ${project} ${item.key} --stack <dir>\` on a disposable stack, never mine, and look at every image it takes.`,
 };
