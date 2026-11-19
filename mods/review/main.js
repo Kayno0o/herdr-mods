@@ -851,7 +851,7 @@ export default class Review extends View {
     // Inside a file whose header scrolled away, its header stays on top of the diff
     const first = list[this.top], sticky = first && first.kind !== "file" ? this.headerOf(first.fi) : -1;
     if (!list.length) {
-      const empty = this.tab === "working" ? "Nothing changed since you last looked" : !this.summary ? "" : this.item ? "Nothing in this commit" : "Nothing left to review";
+      const empty = this.tab === "working" ? (this.base === "HEAD" ? "Nothing changed since HEAD" : "Nothing changed since you last looked") : !this.summary ? "" : this.item ? "Nothing in this commit" : "Nothing left to review";
       return div().flex_1().p(18).text_color(t.dim).child(this.busy ?? empty);
     }
     return div().id("diff-room").flex_1().min_h(0).relative()
