@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { makeRepo } from '../../review/testing'
-import { buildList, claudeFor, columnsOf, commentText, daysLabel, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, WRAP_H, wrapLine } from './model.js'
+import { briefTargets, buildList, claudeFor, columnsOf, commentText, daysLabel, fileJump, heightOf, marks, nextOpenNote, nextUnread, noteLines, placeNotes, railOrder, ROW_H, sideRows, SNAPSHOT, splitFiles, tildePath, traceMap, viewOf, WRAP_H, wrapLine } from './model.js'
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -65,6 +65,10 @@ describe('buildList', () => {
     expect(buildList(files, notes, new Set([1])).filter((e: Entry) => e.fi === 1)).toHaveLength(6)
   })
 
+  test('folds every file not opened when asked to, for an item too long to list whole', () => {
+    expect(buildList(files, notes, new Set([1]), false, true).map((e: Entry) => e.kind === 'file' ? `file ${e.fi}` : e.kind)).toEqual(['file 0', 'file 1', 'hunk', 'pair', 'pair', 'pair', 'pair'])
+  })
+
   test('finds the next unread file and the next open note, wrapping around', () => {
     const list: Entry[] = buildList(files, notes)
 
@@ -121,6 +125,12 @@ test('comments and the Claude an item goes back to', () => {
   expect(claudeFor(commits, [], 't3')).toBe('t3')
 })
 
+test('a feature\'s notes go to each ticket\'s own Claude, the tickets one Claude made sharing a brief', () => {
+  const commits = { '#1': [{ terminal: 't1' }], '#2': [{ terminal: 't2' }], '#3': [{ terminal: 't1' }], '#4': [{ terminal: 'gone' }] } as Record<string, { terminal: string }[]>
+
+  expect(briefTargets(['#1', '#2', '#3', '#4'], (k: string) => commits[k]!, ['t1', 't2'], 'picked')).toEqual(new Map([['t1', ['#1', '#3']], ['t2', ['#2']], ['picked', ['#4']]]))
+})
+
 test('a snapshot takes untracked files in and leaves the index alone', () => {
   const repo = makeRepo()
 
@@ -153,4 +163,120 @@ test('a long note is cut between words, a word wider than the card mid-word', ()
   expect(lines.every((line: string) => !line.startsWith(' ') && !line.endsWith(' '))).toBe(true)
   expect(lines.join(' ')).toBe(words)
   expect(noteLines('x'.repeat(230))).toHaveLength(3)
+})
+
+describe('the mechanical group', () => {
+  const file = (path: string, mechanical = false, read = false) => ({ path, repo: 'r', patch: PATCH, read, binary: false, mechanical })
+  const files = [file('a.ts'), file('lock.json', true, true), file('fr.json', true)]
+
+  test('folds the mechanical files under one row counting them and those read, until it is opened', () => {
+    expect(buildList(files, []).map((e: Entry) => e.kind === 'file' ? `file ${e.fi}` : e.kind).filter((k: string) => k !== 'pair' && k !== 'hunk')).toEqual(['file 0', 'group'])
+    expect(buildList(files, []).at(-1)).toEqual({ kind: 'group', fi: 1, from: 1, to: 3, count: 2, read: 1, open: 0 })
+    expect(buildList(files, [], new Set(), true).filter((e: Entry) => e.kind === 'file').map((e: Entry) => e.fi)).toEqual([0, 1, 2])
+  })
+
+  test('J from the group goes into it when it is open, nowhere when it is folded', () => {
+    const folded = buildList(files, [])
+    const open = buildList(files, [], new Set(), true)
+
+    expect(fileJump(folded, folded.length - 1, 1, 3)).toBe(-1)
+    expect(fileJump(open, open.findIndex((e: Entry) => e.kind === 'group'), 1, 3)).toBe(1)
+    expect(fileJump(folded, folded.length - 1, -1, 3)).toBe(0)
+  })
+})
+
+describe('the trace', () => {
+  const TWO = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1,2 +1,2 @@
+-const label = 'one'
++const label = 'un'
+ keep
+@@ -10,2 +10,2 @@
+-const size = 1
++const size = 2
+ keep
+`
+  const file = (path: string, mechanical = false) => ({ path, repo: 'r', patch: TWO, read: false, binary: false, mechanical })
+  const anchor = (path: string, line: number, text: string, side = 'new') => ({ repo: 'r', path, side, line, text })
+  const trace = [
+    { text: 'Labels in French', ticket: null, partly: null, anchors: [anchor('a.ts', 1, 'const label = \'un\''), anchor('b.ts', 1, 'const label = \'un\'')] },
+    { text: 'Sizes grow', ticket: null, partly: 'the max is not set', anchors: [anchor('a.ts', 10, 'const size = 2')] },
+    { text: 'Errors are logged', ticket: null, partly: null, anchors: [] },
+    { text: 'Old one', ticket: null, partly: null, anchors: [anchor('a.ts', 4, 'gone since')] },
+  ]
+
+  test('gives each requirement its status and the hunks doing it, found by their line or their text as a note is', () => {
+    const { reqs } = traceMap([file('a.ts'), file('b.ts')], trace)
+
+    expect(reqs.map((r: { status: string, hunks: unknown }) => [r.status, r.hunks])).toEqual([
+      ['covered', [{ fi: 0, ri: 0 }, { fi: 1, ri: 0 }]],
+      ['partly', [{ fi: 0, ri: 3 }]],
+      ['missing', []],
+      ['gone', []],
+    ])
+  })
+
+  test('tags each hunk with the requirements it does, and lists the hunks doing none outside the mechanical files', () => {
+    const { tags, outside } = traceMap([file('a.ts'), file('b.ts'), file('lock.json', true)], trace)
+
+    expect([...tags]).toEqual([['0:0', [0]], ['0:3', [1]], ['1:0', [0]]])
+    expect(outside).toEqual([{ fi: 1, ri: 3 }])
+  })
+
+  test('says nothing is outside an item with no trace', () => {
+    expect(traceMap([file('a.ts')], []).outside).toEqual([])
+  })
+
+  test('each row of a file knows its place among the file\'s rows', () => {
+    expect(buildList([file('a.ts')], []).filter((e: Entry) => e.kind !== 'file').map((e: Entry & { ri?: number }) => e.ri)).toEqual([0, 1, 2, 3, 4, 5])
+  })
+})
+
+describe('viewOf', () => {
+  const size = { w: 1000, h: 2000 }
+
+  test('fits the whole picture to the frame', () => {
+    expect(viewOf(size, { w: 400, h: 400 }, null)).toEqual({ scale: 0.2, w: 200, h: 400, left: 0, top: 0 })
+  })
+
+  test('zooms on a region with room around it, centred, at three times at most', () => {
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 456, y: 972, width: 88, height: 56 })).toEqual({ scale: 2.5, w: 400, h: 300, left: -1050, top: -2350 })
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 498, y: 998, width: 4, height: 4 }).scale).toBe(3)
+  })
+
+  test('keeps the picture over the frame near an edge', () => {
+    expect(viewOf(size, { w: 400, h: 300 }, { x: 0, y: 0, width: 64, height: 64 })).toMatchObject({ left: 0, top: 0 })
+  })
+})
+
+describe('fileJump', () => {
+  const list = [{ kind: 'file', fi: 0 }, { kind: 'pair', fi: 0 }, { kind: 'file', fi: 1 }, { kind: 'pair', fi: 1 }, { kind: 'file', fi: 2 }]
+
+  test('J goes to the next file, -1 past the last', () => {
+    expect(fileJump(list, 1, 1, 3)).toBe(1)
+    expect(fileJump(list, 4, 1, 3)).toBe(-1)
+  })
+
+  test('K from inside a file goes back to its own header first, then to the file before', () => {
+    expect(fileJump(list, 3, -1, 3)).toBe(1)
+    expect(fileJump(list, 2, -1, 3)).toBe(0)
+    expect(fileJump(list, 0, -1, 3)).toBe(-1)
+  })
+})
+
+describe('railOrder', () => {
+  const items = [{ key: 'old', approved: true }, { key: 'loose' }, { key: 't1', ticket: {} }, { key: 'new', approved: true }, { key: 't2', ticket: {} }]
+
+  test('tickets, then loose commits, the approved ones only while the history shows, newest first', () => {
+    expect(railOrder(items, false).map(i => i.key)).toEqual(['t1', 't2', 'loose'])
+    expect(railOrder(items, true).map(i => i.key)).toEqual(['t1', 't2', 'loose', 'new', 'old'])
+  })
+
+  test('a feature comes where its first ticket was, its tickets right under it', () => {
+    const featured = [{ key: 't0', ticket: {} }, { key: 't1', ticket: {}, feature: 'f' }, { key: 'loose' }, { key: 't2', ticket: {}, feature: 'f' }, { key: 't3', ticket: {} }, { key: 'f', tickets: ['t1', 't2'] }]
+
+    expect(railOrder(featured, false).map(i => i.key)).toEqual(['t0', 'f', 't1', 't2', 't3', 'loose'])
+  })
 })

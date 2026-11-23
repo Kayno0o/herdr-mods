@@ -1,14 +1,14 @@
 import type { Advance } from './config'
-import type { Item } from './inbox'
+import type { FileRef, Item } from './inbox'
 // The read side: what the Review tab and an agent are shown of an inbox, with each item's diff computed from git.
-import type { Commit, Inbox, Note, Shot, Ticket } from './types'
+import type { Commit, Inbox, Note, Requirement, Shot, Side, Ticket } from './types'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { tilidAdvance } from './config'
 import { commitPatch, netDiff } from './git'
-import { digest, fileKey, findCommit, findItem, itemsOf, itemTitle } from './inbox'
+import { digest, featuresOf, fileKey, findCommit, findItem, itemsOf, itemTitle, membersOf, orderFiles } from './inbox'
 import { shotsDir } from './store'
 
 const DIFF_GIT = /^diff --git a\/.* b\/(.*)$/
@@ -105,7 +105,9 @@ export function itemFiles(inbox: Inbox, item: Item, only?: Commit): { files: Fil
   return { files, exact }
 }
 
-const openNotes = (inbox: Inbox, key: string) => inbox.notes.filter(n => n.item === key && n.state === 'open').length
+// A feature shows the notes of its tickets, where they are kept.
+const noteKeys = (item: Item) => [item.key, ...item.feature?.tickets ?? []]
+const openNotes = (inbox: Inbox, item: Item) => inbox.notes.filter(n => noteKeys(item).includes(n.item) && n.state === 'open').length
 
 export interface ItemSummary {
   key: string
@@ -118,11 +120,18 @@ export interface ItemSummary {
   read: number
   open: number
   approved: boolean
+  // the key of the feature holding this ticket
+  feature: string | null
+  // a feature's tickets
+  tickets: string[]
 }
 
-// The rail: every item with its read progress and open notes; an approved one keeps its counts out, it only lists in History.
+// The rail: every item with its read progress and open notes, then the features gathering tickets; an approved one keeps its counts out, it only lists in History.
 export function summary(inbox: Inbox) {
-  const items: ItemSummary[] = itemsOf(inbox).map((item) => {
+  const tickets = itemsOf(inbox)
+  const features = featuresOf(tickets)
+  const holder = new Map(features.flatMap(f => f.feature!.tickets.map(t => [t, f.key])))
+  const items: ItemSummary[] = [...tickets, ...features].map((item) => {
     const files = item.approved ? [] : itemFiles(inbox, item).files
     const read = inbox.read[item.key] ?? {}
 
@@ -135,8 +144,10 @@ export function summary(inbox: Inbox) {
       commits: item.commits.map(c => ({ sha: c.sha, subject: c.subject })),
       files: files.length,
       read: files.filter(f => read[fileKey(f.repo, f.path)] === digest(f.patch)).length,
-      open: openNotes(inbox, item.key),
+      open: openNotes(inbox, item),
       approved: item.approved,
+      feature: holder.get(item.key) ?? null,
+      tickets: item.feature?.tickets ?? [],
     }
   })
 
@@ -146,6 +157,9 @@ export function summary(inbox: Inbox) {
 export interface FileView extends FileDiff {
   digest: string
   read: boolean
+  // from the item's reading order
+  why: string | null
+  mechanical: boolean
 }
 
 export interface ItemView {
@@ -165,12 +179,18 @@ export interface ItemView {
   commits: (Pick<Commit, 'sha' | 'repo' | 'ts' | 'subject' | 'author' | 'copies' | 'terminal'>)[]
   files: FileView[]
   notes: Note[]
+  trace: Requirement[]
+  // a feature's branch and tickets, each a filter
+  feature: { branch: string, tickets: { key: string, title: string, screen: string | null }[] } | null
+  // the feature holding this ticket
+  partOf: string | null
   // with absolute paths
   shots: Shot[]
 }
 
 export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
   const item = findItem(inbox, ref)
+  const tickets = item.feature ? membersOf(inbox, item) : []
   const only = commitRef ? findCommit(inbox, commitRef) : undefined
   const { files, exact } = itemFiles(inbox, item, only)
   const read = inbox.read[item.key] ?? {}
@@ -180,7 +200,7 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
   return {
     project: inbox.project,
     tilid: inbox.tilid,
-    advance: inbox.tilid && item.ticket ? tilidAdvance() : null,
+    advance: inbox.tilid && (item.ticket || item.feature) ? tilidAdvance() : null,
     repos: inbox.repos,
     key: item.key,
     ticket: item.ticket,
@@ -190,12 +210,37 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
     exact,
     commit: only?.sha ?? null,
     commits: item.commits.map(({ sha, repo, ts, subject, author, copies, terminal }) => ({ sha, repo, ts, subject, author, copies, terminal })),
-    files: files.map((f) => {
+    files: orderFiles(files, inbox.order?.[item.key] ?? []).map((f) => {
       const key = fileKey(f.repo, f.path)
 
       return { ...f, digest: digest(f.patch), read: net.has(key) && read[key] === net.get(key) }
     }),
-    notes: inbox.notes.filter(n => n.item === item.key),
+    notes: inbox.notes.filter(n => noteKeys(item).includes(n.item)),
+    trace: inbox.trace?.[item.key] ?? [],
+    feature: item.feature ? { branch: item.feature.branch, tickets: tickets.map(t => ({ key: t.key, title: itemTitle(t), screen: t.ticket?.screen ?? null })) } : null,
+    partOf: item.ticket ? featuresOf(itemsOf(inbox)).find(f => f.feature!.tickets.includes(item.key))?.key ?? null : null,
     shots: inbox.shots.filter(s => s.item === item.key).map(s => ({ ...s, before: s.before && join(shotsDir(inbox.project), s.before), after: s.after && join(shotsDir(inbox.project), s.after) })),
   }
+}
+
+// What reading files of an item marks: the files themselves, and in a feature each ticket's own diff of them, its final state read covering theirs.
+export function readsOf(inbox: Inbox, ref: string, files: FileRef[]): { item: string, files: (FileRef & { digest: string })[] }[] {
+  const item = findItem(inbox, ref)
+  const wanted = new Set(files.map(f => fileKey(f.repo, f.path)))
+  const own = (of: Item) => itemFiles(inbox, of).files.filter(f => wanted.has(fileKey(f.repo, f.path))).map(f => ({ repo: f.repo, path: f.path, digest: digest(f.patch) }))
+
+  return [item, ...item.feature ? membersOf(inbox, item) : []].map(of => ({ item: of.key, files: own(of) }))
+}
+
+// The ticket a note written on a feature goes to: the latest one whose commits wrote its line, else the latest touching its file.
+export function noteOwner(inbox: Inbox, item: Item, file: FileRef, side: Side, text: string | null): string {
+  if (!item.feature)
+    return item.key
+
+  const members = membersOf(inbox, item).toSorted((a, b) => b.commits.at(-1)!.ts - a.commits.at(-1)!.ts)
+  const patches = members.map(m => ({ key: m.key, patch: itemFiles(inbox, m).files.find(f => f.repo === file.repo && f.path === file.path)?.patch ?? null }))
+  const line = text === null ? null : `${side === 'new' ? '+' : '-'}${text}`
+  const wrote = line === null ? undefined : patches.find(p => p.patch?.split('\n').includes(line))
+
+  return (wrote ?? patches.find(p => p.patch !== null) ?? patches[0]!).key
 }

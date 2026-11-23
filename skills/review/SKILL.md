@@ -21,7 +21,7 @@ review inbox <project>            # or --repo <dir>: tickets and loose commits, 
 review show <project> <item>      # the item's net diff with its notes; --commit <sha> for one commit
 ```
 
-An item is `#13859` (or `13859`) or the start of a loose commit's sha. Where intent is not obvious from the hunks, read the file at that commit: `git -C <repo> show <sha>:<path>`. A description written off the patch alone is usually wrong about why.
+An item is `#13859` (or `13859`), the start of a loose commit's sha, or `feature:<branch>`: two or more tickets left to review on one `feature/` branch gather into it, its net diff theirs. A note written on a feature goes to the ticket whose commit wrote its line, reading a file there reads it in each ticket, and approving it approves them all; describe, order and trace it as one item. Where intent is not obvious from the hunks, read the file at that commit: `git -C <repo> show <sha>:<path>`. A description written off the patch alone is usually wrong about why.
 
 ## Describing
 
@@ -31,6 +31,37 @@ review file <project> <sha> "#13859 - [USE_CASE] Ticket title"   # file a loose 
 ```
 
 Prose is in the user's language, markdown, backticks for identifiers. One to three sentences on the whole item, across its commits and repos: what was wrong or asked, what changes. Never restate the diff, the reader sees the lines. File a loose commit only under the ticket it really belongs to, its title copied from Tilid.
+
+Then the reading order, one line per file on stdin, written again in full whenever it changes:
+
+```bash
+review order <project> <item> <<'EOF'
+src/Controller/InvoiceController.php la route accepte le nouveau statut
+src/Service/InvoiceService.php la règle qui décide du statut
+tests/InvoiceServiceTest.php les trois cas du statut
+translations/messages.fr.yaml mechanical
+EOF
+```
+
+Order the files the way a reader follows the change: where it enters (a route, a page, a command), then the logic it reaches, then what it stores, then the tests. The words after a path say why that file changed, in a few words and the user's language, never what its lines say. `mechanical` marks a file nothing can go wrong in (a rename, i18n keys, formatting, a lockfile, generated code): the tab folds them into one group read in one go, so never mark a file holding logic. A path is `repo:path` when two repos hold it; a file left out comes after the listed ones.
+
+## Tracing
+
+When asked to trace an item, list what its ticket asked for, each requirement with the lines doing it, written again in full whenever it changes:
+
+```bash
+review trace <project> <item> <<'EOF'
+- Une facture payée passe au statut {Réglée}
+  src/Service/InvoiceService.php return InvoiceStatus::Paid;
+  templates/invoice/show.html.twig invoice.status.paid
+- Le montant restant dû s'affiche sur la fiche
+  templates/invoice/show.html.twig invoice.amountDue
+  partly: le cas d'un avoir n'est pas géré
+- Un e-mail part au client à la date du paiement
+EOF
+```
+
+The requirements come from the spec, not the diff: the ticket and the use case it names, or a forge issue's checklist, in their own words, one per thing a tester would check. Under each, an indented `<path> <text of a line>` per hunk doing it, the text found as `note --at` finds it; `partly:` says what is left. A requirement no line does gets nothing under it: the tab shows it missing, which is the point. `## #13859` before a group of requirements says which ticket they come from, in an item holding several.
 
 ## Notes
 
@@ -78,6 +109,7 @@ export default defineScenario({
 - `viewport` defaults to 1440x900, which crops a wide grid: size it to what the change is about. `video: true` only for a behaviour rather than a look.
 - A Vuetify tooltip opens on two real `page.mouse.move` calls, never a forced hover, and a disabled element takes no pointer event: aim at its wrapper.
 - Wait for the new state only on `side === 'after'`: the before side does not have it.
+- `mask: ['<css selector>']` paints over what changes on every load, a clock, a date, a generated id, so it is not boxed as a change.
 - A helper taking the page types it with `Page` from the same `shoot/types`: `playwright-core` does not resolve from the reviews folder.
 
 **Run it**, `--dry-run` first to see the revisions and the shot ids:
@@ -97,6 +129,8 @@ Shots land in the inbox at once, shown in the ticket's header. A shot whose labe
 **Then look at every image you produced.** A run that reports `ok` proves nothing on its own. Read each file and check three things: the two sides differ, and in the way the change claims; the frame holds the whole thing the change is about; nothing else on screen is broken. A capture showing the change off-screen or at the wrong size is a bad capture: fix the viewport or the steps and shoot again. That last check finds real bugs, a label clipped by an `overflow` wrapper being the usual kind: tell the user what and where, and whether the item introduced it.
 
 A failed shot keeps its screenshot and its error, which usually says why.
+
+Each pair also keeps the regions that differ between its two pictures (`regions`, and `grew` when the page got taller), which the tab boxes and steps through. A pair with no region when the change should show, or a dozen boxes over a change that is one component, says the capture missed it or the page reflowed around it.
 
 ## Handing over
 

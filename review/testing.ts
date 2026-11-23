@@ -1,6 +1,6 @@
 // Throwaway git repos for the tests, isolated from the person's git config, their herdr-mods config and a GIT_DIR a hook may have exported.
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
 const GIT_ENV = /^GIT_/
@@ -12,6 +12,8 @@ for (const key of Object.keys(process.env)) {
 
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
+// the diff cache moves to a throwaway folder, the browsers `bun run setup` downloaded under the real one staying found
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'ms-playwright')
 process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), 'review-cache-'))
 process.env.HERDR_MODS_CONFIG = mkdtempSync(join(tmpdir(), 'review-config-'))
 

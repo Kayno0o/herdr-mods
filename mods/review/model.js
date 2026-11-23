@@ -4,17 +4,20 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/;
 const GIT_HEADER = /^diff --git a\/.* b\/(.*)$/;
 const TAB = /\t/g;
 
-export const ROW_H = 20;
+export const ROW_H = 22;
 // each further line of a line too long for its column
-export const WRAP_H = 17;
-export const CODE_SIZE = 11.5;
+export const WRAP_H = 18;
+export const CODE_SIZE = 12;
 // the monospace font's advance is 0.6 of its size
 const CHAR_W = CODE_SIZE * 0.6;
 // the cursor bar, the line number and the +/- sign before a line's text, then a margin after it
 const GUTTER = 3 + 46 + 12 + 8;
-export const FILE_H = 34;
-export const HUNK_H = 24;
-const NOTE_HEAD_H = 36;
+export const FILE_H = 40;
+// the most rows the diff's virtual list takes: past it, files show one at a time
+export const LIST_MAX = 10000;
+export const HUNK_H = 28;
+// a note card's margins, padding, border and author line
+const NOTE_HEAD_H = 46;
 const NOTE_LINE_H = 18;
 const NOTE_LINES = 4;
 const NOTE_COLUMNS = 110;
@@ -117,29 +120,60 @@ export function wrapLine(text, marks, cols) {
 // A file only added or only deleted shows in one column, its existing side.
 export const singleSide = (file) => file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
 
-// A whole item as the list draws it: each file's header, then, unless it is read and folded, its rows with their notes; every entry knows its file.
-export function buildList(files, notes, open = new Set()) {
+// A whole item as the list draws it: each file's header, then, unless it is read and folded (or `foldAll` folds it), its rows with their notes; every entry knows its file. The mechanical files, last in a reading order, sit under one group row and show only once it is opened.
+export function buildList(files, notes, open = new Set(), groupOpen = false, foldAll = false) {
   const list = [];
+  const notesOf = (file) => notes.filter((n) => n.path === file.path && (!n.repo || !file.repo || n.repo === file.repo));
+  const from = files.findIndex((f) => f.mechanical);
   files.forEach((file, fi) => {
-    const own = notes.filter((n) => n.path === file.path && (!n.repo || !file.repo || n.repo === file.repo));
+    const own = notesOf(file);
+    if (fi === from) {
+      const group = files.slice(from);
+      list.push({ kind: "group", fi, from, to: files.length, count: group.length, read: group.filter((f) => f.read).length, open: group.flatMap(notesOf).filter((n) => n.state === "open").length });
+    }
+    if (from >= 0 && fi >= from && !groupOpen) return;
     list.push({ kind: "file", fi, open: own.filter((n) => n.state === "open").length });
-    if (file.read && !open.has(fi)) return;
+    if ((file.read || foldAll) && !open.has(fi)) return;
     if (file.binary) { list.push({ kind: "meta", fi, text: "Binary file" }); return; }
     const rows = sideRows(file.patch), placed = placeNotes(rows, own);
     for (const { note, moved } of placed.get(-1) ?? []) list.push({ kind: "note", fi, note, moved });
     rows.forEach((row, i) => {
-      list.push({ ...row, fi });
+      list.push({ ...row, fi, ri: i });
       for (const { note, moved } of placed.get(i) ?? []) list.push({ kind: "note", fi, note, moved });
     });
   });
   return list;
 }
 
+// An item's requirements against its diff: each with its status and the hunks doing it (`ri` a hunk's row in its file's sideRows), each hunk's requirements under `fi:ri`, and the hunks doing none, mechanical files left out. An anchor follows its line as a note does; a requirement whose every anchor lost its line is gone.
+export function traceMap(files, trace) {
+  const tags = new Map(), outside = [];
+  const reqs = trace.map((r) => ({ ...r, hunks: [] }));
+  files.forEach((file, fi) => {
+    const own = reqs.flatMap((r, k) => r.anchors.filter((a) => a.path === file.path && (!a.repo || !file.repo || a.repo === file.repo)).map((a) => ({ ...a, k })));
+    const rows = sideRows(file.patch);
+    for (const [at, placed] of placeNotes(rows, own)) {
+      if (at < 0) continue;
+      const ri = rows.findLastIndex((row, i) => i <= at && row.kind === "hunk");
+      const key = `${fi}:${ri}`;
+      for (const { note } of placed) {
+        const req = reqs[note.k];
+        if (!req.hunks.some((h) => h.fi === fi && h.ri === ri)) req.hunks.push({ fi, ri });
+        if (!(tags.get(key) ?? []).includes(note.k)) tags.set(key, [...tags.get(key) ?? [], note.k]);
+      }
+    }
+    if (!trace.length || file.mechanical) return;
+    rows.forEach((row, ri) => { if (row.kind === "hunk" && !tags.has(`${fi}:${ri}`)) outside.push({ fi, ri }); });
+  });
+  for (const r of reqs) r.status = r.hunks.length ? (r.partly ? "partly" : "covered") : r.anchors.length ? "gone" : "missing";
+  return { reqs, tags, outside };
+}
+
 const linesOf = (side, cols) => side ? Math.max(1, Math.ceil(side.text.length / cols)) : 1;
 
 // An entry's height, a line too long for its column taking a further line per piece; `cols` comes from columnsOf, `files` tells which file is in one column.
 export function heightOf(entry, cols = columnsOf(0), files = []) {
-  if (entry.kind === "file") return FILE_H;
+  if (entry.kind === "file" || entry.kind === "group") return FILE_H;
   if (entry.kind === "hunk") return HUNK_H;
   if (entry.kind === "note") return noteHeight(entry.note);
   if (entry.kind !== "pair") return ROW_H;
@@ -155,6 +189,32 @@ export function nextUnread(files, from) {
     if (!files[fi].read) return fi;
   }
   return -1;
+}
+
+// The file J (step 1) or K (step -1) goes to from the list row `cursor`: the next or previous file, K first going back to the header of the file it is inside; -1 past either end. From the mechanical group's row, J enters it only while it is open.
+export function fileJump(list, cursor, step, count) {
+  const e = list[cursor];
+  if (e?.kind === "group") return step < 0 ? (e.from > 0 ? e.from - 1 : -1) : list[cursor + 1]?.kind === "file" ? e.from : -1;
+  const fi = e?.fi ?? -1, header = list.findIndex((x) => x.kind === "file" && x.fi === fi);
+  const to = step < 0 && header >= 0 && cursor > header ? fi : fi + step;
+  return to >= 0 && to < count ? to : -1;
+}
+
+// The rail's items in its order: tickets, loose commits, then the approved ones, newest first, while shown.
+// A feature takes the place of its first ticket, with its tickets under it.
+export function railGroups(items) {
+  const byKey = new Map(items.map((i) => [i.key, i]));
+  const tickets = items.filter((i) => i.ticket && !i.approved).flatMap((i) => {
+    if (!i.feature) return [i];
+    const feature = byKey.get(i.feature);
+    return feature?.tickets[0] === i.key ? [feature, ...feature.tickets.map((k) => byKey.get(k)).filter(Boolean)] : [];
+  });
+  return { tickets, loose: items.filter((i) => !i.ticket && !i.tickets?.length && !i.approved), done: items.filter((i) => i.approved).reverse() };
+}
+
+export function railOrder(items, history) {
+  const { tickets, loose, done } = railGroups(items);
+  return [...tickets, ...loose, ...history ? done : []];
 }
 
 // The list index of the next open note after `from`, wrapping around.
@@ -220,10 +280,35 @@ export function claudeFor(commits, live, picked) {
   return commits.findLast((c) => c.terminal && alive.has(c.terminal))?.terminal ?? picked ?? null;
 }
 
+// Where a feature's notes go: each ticket's Claude with the tickets it made, as one brief each.
+export function briefTargets(keys, commitsOf, live, picked) {
+  const to = new Map();
+  for (const key of keys) {
+    const claude = claudeFor(commitsOf(key), live, picked);
+    to.set(claude, [...(to.get(claude) ?? []), key]);
+  }
+  return to;
+}
+
+// How a screenshot of `size` shows in `frame`: fitted whole, or zoomed on `region` with room around it (three times at most), centred on it and kept over the frame; `left` and `top` place the picture in the frame.
+export function viewOf(size, frame, region) {
+  const PAD = 32, MAX_ZOOM = 3;
+  const fit = Math.min(frame.w / size.w, frame.h / size.h);
+  const scale = region ? Math.max(fit, Math.min(MAX_ZOOM, frame.w / (region.width + 2 * PAD), frame.h / (region.height + 2 * PAD))) : fit;
+  const w = Math.floor(Math.min(frame.w, size.w * scale)), h = Math.floor(Math.min(frame.h, size.h * scale));
+  const place = (room, length, centre) => Math.round(Math.min(0, Math.max(room - length * scale, room / 2 - centre * scale)));
+  if (!region) return { scale, w, h, left: 0, top: 0 };
+  return { scale, w, h, left: place(w, size.w, region.x + region.width / 2), top: place(h, size.h, region.y + region.height / 2) };
+}
+
+const orderAsk = (cli, project, item) => `give the order to read its files in, as the review skill says: \`${cli} order ${project} ${item.key}\` with one line per file on stdin, \`<path> <why it changed, a few words in French>\`, or \`<path> mechanical\`.`;
+
 // What the Ask buttons hand a Claude; `cli` is how it runs the review CLI.
 export const PROMPTS = {
   review: (cli, project, item) => `Review ${item.title} in the ${project} review inbox. Read it with \`${cli} show ${project} ${item.key}\`, then add a note on each line that is wrong, risky or unclear: \`${cli} note ${project} ${item.key} <path> <body> --at "<text of the line>"\`. Notes are exceptions, not a summary: none on a line that is fine.`,
-  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`.`,
+  describe: (cli, project, item) => `Describe ${item.title} for its review: read \`${cli} show ${project} ${item.key}\`, then write in French, in one to three sentences, what it changes and why: \`${cli} prose ${project} ${item.key} "<text>"\`. Then ${orderAsk(cli, project, item)}`,
+  order: (cli, project, item) => `Read ${item.title} with \`${cli} show ${project} ${item.key}\`, then ${orderAsk(cli, project, item)}`,
   file: (cli, project, shas) => `File the loose commits ${shas.join(", ")} of the ${project} review inbox under their Tilid tickets: for each, find the ticket it belongs to in Tilid and run \`${cli} file ${project} <sha> "#<number> - [<USE_CASE>] <title>"\`. Leave a commit that belongs to no ticket alone.`,
+  trace: (cli, project, item) => `Trace ${item.title} to its requirements, as the review skill says: read the ticket and the spec of the use case it names (a forge issue's checklist when it is no Tilid ticket), read \`${cli} show ${project} ${item.key}\`, then run \`${cli} trace ${project} ${item.key}\` with on stdin one \`- <requirement, in the spec's own words>\` line per requirement, each followed by indented \`<path> <text of a line doing it>\` lines and \`partly: <what is left, in French>\` when it is only partly done. A requirement nothing does gets no line under it.${item.feature ? ` It is a feature: do it for each of its tickets, ${item.feature.tickets.map((t) => t.key).join(", ")}, each ticket's requirements under a \`## #<number>\` line.` : ""}`,
   shots: (cli, project, item) => `Take before and after screenshots of the screens ${item.title} changes, following the review skill: write its scenario, then \`${cli} shoot ${project} ${item.key} --stack <dir>\` on a disposable stack, never mine, and look at every image it takes.`,
 };

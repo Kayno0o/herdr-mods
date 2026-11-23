@@ -1,5 +1,5 @@
 // An item as text for an agent: each diff line numbered on both sides, each note under its line, so `note --line` can be written from it.
-import type { Note } from './types'
+import type { Note, Requirement } from './types'
 import type { ItemView } from './view'
 
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
@@ -9,6 +9,21 @@ const num = (n: number | null) => (n === null ? '' : String(n)).padStart(PAD)
 
 function noteLine(note: Note) {
   return `${' '.repeat(PAD * 2 + 1)}│ ↳ ${note.id} ${note.state} by ${note.author}: ${note.body.replaceAll('\n', ' ')}`
+}
+
+function traceStatus(r: Requirement) {
+  if (!r.anchors.length)
+    return 'missing'
+
+  return r.partly ? 'partly' : 'covered'
+}
+
+// a requirement names its ticket only in an item holding others
+function traceLine(r: Requirement, many: boolean, own: number | null) {
+  const at = r.anchors.map(a => `${many ? `${a.repo}:` : ''}${a.path}:${a.line}${a.side === 'old' ? ' (old side)' : ''}`)
+  const partly = r.partly ? `, left: ${r.partly}` : ''
+
+  return `  ${traceStatus(r).padEnd(7)}  ${r.ticket && r.ticket !== own ? `#${r.ticket} ` : ''}${r.text}${at.length ? `  ${at.join(', ')}` : ''}${partly}`
 }
 
 export function renderView(view: ItemView): string {
@@ -25,6 +40,9 @@ export function renderView(view: ItemView): string {
 
   const many = Object.keys(view.repos).length > 1
 
+  if (view.trace.length)
+    out.push('', 'Requirements', ...view.trace.map(r => traceLine(r, many, view.ticket?.number ?? null)))
+
   for (const file of view.files) {
     const notes = view.notes.filter(n => n.repo === file.repo && n.path === file.path)
     const placed = new Set<Note>()
@@ -32,7 +50,7 @@ export function renderView(view: ItemView): string {
     let next = 0
     let inHunk = false
 
-    out.push('', `=== ${many ? `${file.repo}:` : ''}${file.path} (${file.status}${file.oldPath ? ` from ${file.oldPath}` : ''}, +${file.added} -${file.removed})${file.read ? ' read' : ''}`)
+    out.push('', `=== ${many ? `${file.repo}:` : ''}${file.path} (${file.status}${file.oldPath ? ` from ${file.oldPath}` : ''}, +${file.added} -${file.removed})${file.read ? ' read' : ''}${file.mechanical ? ' mechanical' : ''}${file.why ? `: ${file.why}` : ''}`)
 
     for (const note of notes.filter(n => n.line === null)) {
       out.push(noteLine(note))

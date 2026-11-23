@@ -8,11 +8,12 @@ import { addCommit, syncRepo } from './add'
 import { configFile, loadConfig, tilidAdvance } from './config'
 import { knownForges } from './forge'
 import { lineOf, renderView, textAt } from './format'
-import { addNote, approve, brief, dropNotes, fileUnder, findItem, itemsOf, markRead, nextShotId, setNoteState } from './inbox'
+import { addNote, approve, brief, dropNotes, fileNamed, fileUnder, findItem, itemsOf, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
-import { summary, view } from './view'
+import { readTrace } from './trace'
+import { noteOwner, readsOf, summary, view } from './view'
 
 export const CLI = `bun ${import.meta.path}`
 
@@ -32,6 +33,8 @@ const HELP = `review <command>: the per-project review inboxes (~/.local/share/h
   approve <project> <item> [--undo]
   advance <project> <ticket>                          move it from tilid.reviewStatus to tilid.afterReviewStatus in Tilid, as ${configFile()} names them
   prose <project> <item> <text...>                    what the item does, in a few sentences
+  order <project> <item> < lines                      the order to read its files in, one line each: <path> <why it changed>, or <path> mechanical
+  trace <project> <item> < lines                      its requirements and the lines doing each: "- <requirement>", then indented "<path> <text of a line>" or "partly: <what is left>"; "## #n" before a ticket's own
   file <project> <sha> <"#n - [SCREEN] title">... | none   file a commit under tickets
   brief <project> [<item>...]                         the open notes as a prompt for a Claude
   shot <project> <item> --label <l> [--route <r>] [--before <png>] [--after <png>]   file screenshots taken by hand
@@ -90,15 +93,7 @@ function inboxOf(project: string) {
 }
 
 // A path as given to `note`: `repo:path` when the inbox holds several repos.
-function fileOf(project: string, item: string, path: string) {
-  const shown = view(inboxOf(project), item)
-  const file = shown.files.find(f => f.path === path || `${f.repo}:${f.path}` === path)
-
-  if (!file)
-    throw new Error(`${path} is not in ${shown.title}: ${shown.files.map(f => f.path).join(', ')}`)
-
-  return file
-}
+const fileOf = (project: string, item: string, path: string) => fileNamed(view(inboxOf(project), item).files, path)
 
 const commands: Record<string, () => void | Promise<void>> = {
   add() {
@@ -144,13 +139,17 @@ const commands: Record<string, () => void | Promise<void>> = {
 
     const side = (at?.side ?? flags.side ?? 'new') as Side
     const line = at?.line ?? (flags.line ? Number(flags.line) : null)
+    const text = line === null ? null : textAt(file.patch, side, line)
+    // a feature's note is kept by the ticket that wrote its line, whose Claude it is sent to
+    const held = inboxOf(project!)
+    const owner = noteOwner(held, findItem(held, item!), file, side, text)
     const note = update(project!, inbox => addNote(inbox, {
-      item: findItem(inbox, item!).key,
+      item: owner,
       repo: file.repo,
       path: file.path,
       side,
       line,
-      text: line === null ? null : textAt(file.patch, side, line),
+      text,
 
       author: (flags.author ?? 'claude') as 'claude' | 'me',
       body: body.join(' '),
@@ -181,7 +180,12 @@ const commands: Record<string, () => void | Promise<void>> = {
     const shown = view(inboxOf(project!), item!)
     const files = flags.all ? shown.files : paths.map(path => fileOf(project!, item!, path))
 
-    update(project!, inbox => markRead(inbox, shown.key, files, flags.undo))
+    const reads = readsOf(inboxOf(project!), shown.key, files)
+
+    update(project!, (inbox) => {
+      for (const r of reads)
+        markRead(inbox, r.item, r.files, flags.undo)
+    })
     print(files.map(f => f.path), `${flags.undo ? 'unread' : 'read'}: ${files.length}`)
   },
   approve() {
@@ -225,6 +229,26 @@ const commands: Record<string, () => void | Promise<void>> = {
 
     print({ key }, `prose of ${key} written`)
   },
+  async order() {
+    const [project, item] = need(2, '<project> <item> < "<path> <why>" lines')
+    const shown = view(inboxOf(project!), item!)
+    const order = readOrder(await Bun.stdin.text(), shown.files)
+
+    update(project!, (inbox) => {
+      (inbox.order ??= {})[shown.key] = order
+    })
+    print(order, `order of ${shown.key}: ${order.length} of ${shown.files.length} files, ${order.filter(o => o.mechanical).length} mechanical`)
+  },
+  async trace() {
+    const [project, item] = need(2, '<project> <item> < "- <requirement>" lines')
+    const shown = view(inboxOf(project!), item!)
+    const trace = readTrace(await Bun.stdin.text(), shown.files)
+
+    update(project!, (inbox) => {
+      (inbox.trace ??= {})[shown.key] = trace
+    })
+    print(trace, `trace of ${shown.key}: ${trace.length} requirements, ${trace.filter(r => !r.anchors.length).length} missing, ${trace.filter(r => r.partly).length} partly`)
+  },
   file() {
     const [project, sha, ...lines] = need(3, '<project> <sha> <"#n - [SCREEN] title">... | none')
     const tickets = lines.join('\n') === 'none'
@@ -244,7 +268,7 @@ const commands: Record<string, () => void | Promise<void>> = {
   brief() {
     const [project, ...refs] = need(1, '<project> [<item>...]')
     const inbox = inboxOf(project!)
-    const items = refs.length ? refs.map(ref => findItem(inbox, ref)) : itemsOf(inbox)
+    const items = refs.length ? refs.flatMap(ref => membersOf(inbox, findItem(inbox, ref))) : itemsOf(inbox)
 
     print(brief(inbox, items, CLI), brief(inbox, items, CLI))
   },

@@ -1,6 +1,6 @@
 import type { Commit, Inbox } from './types'
 import { describe, expect, test } from 'bun:test'
-import { addNote, approve, brief, digest, emptyInbox, fileCommit, findItem, itemsOf, markRead, setNoteState } from './inbox'
+import { addNote, approve, brief, digest, emptyInbox, featuresOf, fileCommit, findItem, itemsOf, markRead, orderFiles, readOrder, setNoteState } from './inbox'
 import { parseTicket, ticketsIn } from './tickets'
 
 const ticket = (line: string) => parseTicket(line)!
@@ -106,5 +106,69 @@ describe('read', () => {
     expect(digest('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+c\n')).not.toBe(before)
     markRead(box, '#1', [{ repo: 'app', path: 'f', digest: before }], true)
     expect(box.read['#1']).toBeUndefined()
+  })
+})
+
+describe('reading order', () => {
+  const files = [{ repo: 'api', path: 'a.ts' }, { repo: 'api', path: 'b.ts' }, { repo: 'web', path: 'a.ts' }, { repo: 'web', path: 'lock.json' }]
+
+  test('reads one file a line, its path then why it changed, `mechanical` marking a mechanical one', () => {
+    expect(readOrder('web:a.ts  shows the new field\n\nb.ts the handler checks it first\nweb:lock.json mechanical\n', files)).toEqual([
+      { repo: 'web', path: 'a.ts', why: 'shows the new field', mechanical: false },
+      { repo: 'api', path: 'b.ts', why: 'the handler checks it first', mechanical: false },
+      { repo: 'web', path: 'lock.json', why: null, mechanical: true },
+    ])
+  })
+
+  test('refuses a path the item lacks or names twice, a file listed twice keeping one place', () => {
+    expect(() => readOrder('c.ts why', files)).toThrow('c.ts is not in this item')
+    expect(() => readOrder('a.ts why', files)).toThrow('a.ts names several files: api:a.ts, web:a.ts')
+    expect(readOrder('b.ts first\nb.ts again', files)).toHaveLength(1)
+  })
+
+  test('puts the files in its order, those it leaves out after them as they came, the mechanical ones last', () => {
+    const order = readOrder('web:lock.json mechanical\nweb:a.ts shows it\nb.ts checks it', files)
+
+    expect(orderFiles(files, order).map(f => [`${f.repo}:${f.path}`, f.why, f.mechanical])).toEqual([
+      ['web:a.ts', 'shows it', false],
+      ['api:b.ts', 'checks it', false],
+      ['api:a.ts', null, false],
+      ['web:lock.json', null, true],
+    ])
+    expect(orderFiles(files, []).map(f => f.path)).toEqual(['a.ts', 'b.ts', 'a.ts', 'lock.json'])
+  })
+
+  test('keeps the listed files first when the order names files this view lacks, as one commit shown alone does', () => {
+    const files = [{ repo: 'app', path: 'a.ts' }, { repo: 'app', path: 'b.ts' }]
+    const order = ['q.ts', 'r.ts', 's.ts', 'b.ts'].map(path => ({ repo: 'app', path, why: 'x', mechanical: false }))
+
+    expect(orderFiles(files, order).map(f => f.path)).toEqual(['b.ts', 'a.ts'])
+  })
+})
+
+describe('features', () => {
+  const on = (branch: string) => ({ branch })
+  const box = () => inbox(
+    commit('a', 1, '#1 - [ONE] One', on('feature/groups')),
+    commit('b', 2, '#2 - [TWO] Two', on('feature/groups')),
+    commit('c', 3, '#3 - [THREE] Three', on('feature/groups')),
+    commit('d', 4, '#4 - [ALONE] Alone', on('feature/alone')),
+    commit('e', 5, '#5 - [MAIN] Main', on('main')),
+    commit('f', 6, '#6 - [OLD] Old'),
+  )
+
+  test('gathers the tickets left to review on one feature branch, two at least, over all their commits', () => {
+    const inb = box()
+
+    approve(inb, findItem(inb, '3'))
+    expect(featuresOf(itemsOf(inb)).map(f => [f.key, f.feature!.tickets, f.commits.map(c => c.sha)])).toEqual([['feature:feature/groups', ['#1', '#2'], ['a', 'b']]])
+  })
+
+  test('approving a feature approves each of its tickets, and it is found by its key', () => {
+    const inb = box()
+
+    approve(inb, findItem(inb, 'feature:feature/groups'))
+    expect(itemsOf(inb).filter(i => i.approved).map(i => i.key)).toEqual(['#1', '#2', '#3'])
+    expect(() => findItem(inb, 'feature:feature/groups')).toThrow('no ticket or loose commit')
   })
 })

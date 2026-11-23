@@ -28,6 +28,8 @@ export interface Commit {
   copies: string[]
   // the Claude terminal that made it, for handing its notes back
   terminal: string | null
+  // the branch checked out when it was made, null when detached; absent in inboxes filed before it
+  branch?: string | null
 }
 
 export interface Note {
@@ -58,6 +60,43 @@ export interface Shot {
   source?: 'shoot'
   // why the last capture failed, its screenshot kept since it usually shows why
   error?: string | null
+  // what differs between its two pictures, on the after one, and how much taller it got; absent on shots taken before regions were
+  regions?: Region[]
+  grew?: number
+}
+
+// A box on a screenshot, in its pixels.
+export interface Region {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// A line a requirement is implemented on, found again by its text once later commits move it, as a note is.
+export interface Anchor {
+  repo: string
+  path: string
+  side: Side
+  line: number
+  text: string
+}
+
+// One thing an item was asked to do, in its spec's own words, with the lines doing it: none is missing, `partly` says what is left.
+export interface Requirement {
+  text: string
+  // the ticket it comes from, in a feature item holding several
+  ticket: number | null
+  anchors: Anchor[]
+  partly: string | null
+}
+
+// One file of an item's reading order: why it changed, or that its change is mechanical (a rename, i18n keys, formatting, a lockfile).
+export interface OrderEntry {
+  repo: string
+  path: string
+  why: string | null
+  mechanical: boolean
 }
 
 export interface Inbox {
@@ -69,6 +108,10 @@ export interface Inbox {
   commits: Commit[]
   // the prose an agent wrote, per item
   prose: Record<string, string>
+  // the order an agent gave an item's files, per item; absent in inboxes written before it
+  order?: Record<string, OrderEntry[]>
+  // what an agent traced each item's requirements to, per item; absent in inboxes written before it
+  trace?: Record<string, Requirement[]>
   notes: Note[]
   // item to path to the digest of the file's diff when it was read: a later change to the file unreads it
   read: Record<string, Record<string, string>>

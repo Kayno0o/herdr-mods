@@ -5,13 +5,15 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import { chromium } from 'playwright-core'
 import { addCommit } from '../review/add'
 import { git } from '../review/git'
 import { emptyInbox } from '../review/inbox'
 import { load, projectDir, scenarioFile, shotsDir } from '../review/store'
 import { makeRepo } from '../review/testing'
 import { needsShooting, statesOf } from './plan'
-import { record, shoot } from './run'
+import { regionsIn } from './regions'
+import { capture, record, shoot } from './run'
 import { checkout, repoDir, restore } from './stack'
 
 const commit = (sha: string, repo: string, parent: string): Commit => ({ sha, repo, ts: 0, parents: [parent], author: 'a', subject: sha, body: '', tickets: [], filed: false, patchId: null, copies: [], terminal: null })
@@ -81,9 +83,10 @@ test('a retaken shot keeps its place, and the scenario\'s shots it no longer nam
     for (const file of ['s001-b.png', 's002-b.png', 's003-b.png'])
       writeFileSync(join(shotsDir('p'), file), '')
 
-    record('p', '#1', { entry: { label: 'one', route: '/' }, id: 's001', files: { before: 's001-b2.png', after: 's001-a2.png' }, errors: [] }, new Set(['one', 'two']))
+    record('p', '#1', { entry: { label: 'one', route: '/' }, id: 's001', files: { before: 's001-b2.png', after: 's001-a2.png' }, errors: [], diff: { regions: [{ x: 0, y: 8, width: 16, height: 8 }], grew: 12 } }, new Set(['one', 'two']))
 
     expect(load('p')!.shots.map(s => `${s.id} ${s.before}`)).toEqual(['s001 s001-b2.png', 's003 s003-b.png', 's004 s004-b.png'])
+    expect(load('p')!.shots[0]).toMatchObject({ regions: [{ x: 0, y: 8, width: 16, height: 8 }], grew: 12 })
     expect(readdirSync(shotsDir('p')).toSorted()).toEqual(['s003-b.png'])
   }
   finally {
@@ -128,5 +131,28 @@ test('takes the project\'s preset and its .env from the config folder', async ()
     repo.cleanup()
     rmSync(reviews, { recursive: true, force: true })
     rmSync(config, { recursive: true, force: true })
+  }
+})
+
+test('a shot\'s masked parts, a clock or a random id, come out the same on both sides and are not boxed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'review-mask-'))
+  let hits = 0
+  const server = Bun.serve({ port: 0, fetch: () => new Response(`<body style="margin:0;background:#fff"><p id="clock" style="font:40px sans-serif">${++hits}:0${hits}</p></body>`, { headers: { 'content-type': 'text/html' } }) })
+  const browser = await chromium.launch()
+  const preset = { ready: () => Promise.resolve(), login: () => Promise.resolve(), hooks: [], settle: 0, url: () => '' } as Preset
+  const take = async (side: 'before' | 'after', mask?: string[]) => {
+    expect(await capture(browser, preset, { cookies: [], origins: [] }, server.url.origin, join(dir, `${side}.png`), { label: 'clock', route: '/', mask }, side)).toBeNull()
+
+    return join(dir, `${side}.png`)
+  }
+
+  try {
+    expect((await regionsIn(browser, await take('before'), await take('after'))).regions.length).toBeGreaterThan(0)
+    expect((await regionsIn(browser, await take('before', ['#clock']), await take('after', ['#clock']))).regions).toEqual([])
+  }
+  finally {
+    await browser.close()
+    server.stop()
+    rmSync(dir, { recursive: true, force: true })
   }
 })
