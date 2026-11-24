@@ -8,9 +8,10 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright-core'
+import { writeCompare } from '../review/compare'
 import { configDir } from '../review/config'
 import { git } from '../review/git'
-import { findItem, nextShotId } from '../review/inbox'
+import { findItem, itemTitle, nextShotId } from '../review/inbox'
 import { load, scenarioFile, shotName, shotsDir, update } from '../review/store'
 import { needsShooting, statesOf } from './plan'
 import { regionsOfPair } from './regions'
@@ -309,8 +310,9 @@ export async function shoot(project: string, ref: string, options: ShootOptions)
   }
 
   const failures = plan.filter(planned => planned.errors.length).length
+  const page = writeCompare(load(project)!, item.key, itemTitle(item))
 
-  console.log(`${plan.length - failures}/${plan.length} shots captured; ${options.keep ? 'the stack stays on the after side' : 'the stack is back where it was, migrations kept'}`)
+  console.log(`${plan.length - failures}/${plan.length} shots captured${page ? `, compared in ${page}` : ''}; ${options.keep ? 'the stack stays on the after side' : 'the stack is back where it was, migrations kept'}`)
 
   return failures
 }

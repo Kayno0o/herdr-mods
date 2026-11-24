@@ -124,7 +124,7 @@ review shoot <project> <item> --stack <stack-dir> --url <base-url>   # a stack w
 
 The project needs a preset in `{{CONFIG}}/presets/<project>.ts` (base URL, login, readiness wait, checkout hooks, browser locale), and the login account in `{{CONFIG}}/.env` (the keys the preset names). A new project gets a preset modelled on the closest one there, else on `{{REPO}}/shoot/example-preset.ts`.
 
-Shots land in the inbox at once, shown in the ticket's header. A shot whose label leaves the scenario is dropped at the next run. Screenshots taken some other way go in with `review shot <project> <item> --label "<l>" --route <r> --before <png> --after <png>`.
+Shots land in the inbox at once, shown in the ticket's header. A shot whose label leaves the scenario is dropped at the next run. Screenshots taken some other way go in with `review shot <project> <item> --label "<l>" --route <r> --before <png> --after <png>`. Both also write the item's pairs, those with both sides and no failure, as one `art compare` page (a split line to drag, or side by side), whose path they print and the tab's Browser button opens; give that path in the handing over.
 
 **Then look at every image you produced.** A run that reports `ok` proves nothing on its own. Read each file and check three things: the two sides differ, and in the way the change claims; the frame holds the whole thing the change is about; nothing else on screen is broken. A capture showing the change off-screen or at the wrong size is a bad capture: fix the viewport or the steps and shoot again. That last check finds real bugs, a label clipped by an `overflow` wrapper being the usual kind: tell the user what and where, and whether the item introduced it.
 

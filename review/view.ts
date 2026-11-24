@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { comparePage } from './compare'
 import { tilidAdvance } from './config'
 import { commitPatch, netDiff } from './git'
 import { digest, featuresOf, fileKey, findCommit, findItem, itemsOf, itemTitle, membersOf, orderFiles } from './inbox'
@@ -186,6 +187,8 @@ export interface ItemView {
   partOf: string | null
   // with absolute paths
   shots: Shot[]
+  // the page `art compare` wrote of its pairs, for the browser
+  compare: string | null
 }
 
 export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
@@ -220,6 +223,7 @@ export function view(inbox: Inbox, ref: string, commitRef?: string): ItemView {
     feature: item.feature ? { branch: item.feature.branch, tickets: tickets.map(t => ({ key: t.key, title: itemTitle(t), screen: t.ticket?.screen ?? null })) } : null,
     partOf: item.ticket ? featuresOf(itemsOf(inbox)).find(f => f.feature!.tickets.includes(item.key))?.key ?? null : null,
     shots: inbox.shots.filter(s => s.item === item.key).map(s => ({ ...s, before: s.before && join(shotsDir(inbox.project), s.before), after: s.after && join(shotsDir(inbox.project), s.after) })),
+    compare: existsSync(comparePage(inbox.project, item.key)) ? comparePage(inbox.project, item.key) : null,
   }
 }
 

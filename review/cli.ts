@@ -5,10 +5,11 @@ import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { addCommit, syncRepo } from './add'
+import { writeCompare } from './compare'
 import { configFile, loadConfig, tilidAdvance } from './config'
 import { knownForges } from './forge'
 import { lineOf, renderView, textAt } from './format'
-import { addNote, approve, brief, dropNotes, fileNamed, fileUnder, findItem, itemsOf, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
+import { addNote, approve, brief, dropNotes, fileNamed, fileUnder, findItem, itemsOf, itemTitle, markRead, membersOf, nextShotId, readOrder, setNoteState } from './inbox'
 import { load, locate, projects, scenarioFile, shotName, shotsDir, update } from './store'
 import { parseTicket } from './tickets'
 import { advanceTicket } from './tilid'
@@ -303,7 +304,10 @@ const commands: Record<string, () => void | Promise<void>> = {
       return next
     })
 
-    print(shot, `shot ${shot.id} on ${shot.item}`)
+    const inbox = inboxOf(project!)
+    const page = writeCompare(inbox, shot.item, itemTitle(findItem(inbox, shot.item)))
+
+    print({ ...shot, compare: page }, `shot ${shot.id} on ${shot.item}${page ? `, compared in ${page}` : ''}`)
   },
   async shoot() {
     const [project, item] = need(2, '<project> <item> --stack <dir>')

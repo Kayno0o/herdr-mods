@@ -883,7 +883,8 @@ export default class Review extends View {
             .child(h_flex().w(247).gap(6).items_center()
               .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(s.label))
               .when(Boolean(badge), (x) => x.child(div().flex_none().px(5).rounded(4).bg(badge[1] + "26").text_color(badge[1]).text_size(10.5).child(badge[0]))));
-        }))))
+        }))
+        .when(Boolean(item.compare), (x) => x.child(div().flex_none().child(this.button("shots-browser", h_flex().gap(6).items_center().child("Browser").child(icon("arrow-up-right", 12)), (cx) => cx.open_url(`file://${encodeURI(item.compare)}`), t, "Open the screens in the browser: a split line to drag, or side by side", "ghost"))))))
       .child(h_flex().gap(8).items_center()
         .child(this.button("approve", item.approved ? "Unapprove" : h_flex().gap(6).items_center().child("Approve").child(div().text_size(10.5).opacity(0.7).child("a")), (cx) => this.approve(cx), t, item.approved ? "Back into the inbox" : "Approve it and go to the next one", item.approved ? "plain" : "primary"))
         .when(Boolean(item.advance) && !item.approved, (e) => e.child(this.button("approve-tilid", "Approve and move in Tilid", (cx) => this.approve(cx, true), t, `Approve, and move the ticket from "${item.advance.from}" to "${item.advance.to}"`)))
