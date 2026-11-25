@@ -4,7 +4,7 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { agents, spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
-import { CURRENT, logArgs, parseLog, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
+import { CURRENT, logArgs, parseLog, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
 import { CHANGED, Menu, Dialog, act, openMenu, openDialog, runPlan } from "./overlay.js";
 import { plan } from "./actions.js";
 import { BUN, CLI } from "./paths.js";
@@ -121,9 +121,13 @@ export default class Git extends View {
         if (status.code !== 0) throw new Error(status.stderr);
         const hasHead = head.code === 0;
         const entries = status.stdout.split("\0").filter(Boolean);
-        const untracked = entries.slice(0, 1000).filter((e) => e.startsWith("?? ")).map((e) => `:(literal)${e.slice(3)}`);
+        const untracked = entries.slice(0, 1000).filter((e) => e.startsWith("?? ")).map((e) => e.slice(3));
+        const count = async () => {
+          const found = untracked.length ? parseCountable((await exec("find", countableArgs(untracked), { cwd: root, on })).stdout) : [];
+          return found.length ? git(["grep", "--untracked", "-c", "-I", "-z", "", "--", ...found]) : { code: 0, stdout: "", stderr: "" };
+        };
         const [counted, ...diffs] = await Promise.all([
-          untracked.length ? git(["grep", "--untracked", "-c", "-I", "-z", "", "--", ...untracked]) : Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+          count(),
           ...(hasHead ? [git(["diff", "HEAD", "--numstat", "-z", "--no-renames"])] : [git(["diff", "--cached", "--numstat", "-z", "--no-renames"]), git(["diff", "--numstat", "-z", "--no-renames"])]),
         ]);
         for (const r of diffs) if (r.code !== 0) throw new Error(r.stderr);

@@ -132,6 +132,13 @@ export function numstat(outputs) {
   return stats;
 }
 
+// `find` keeping the untracked paths under 2 MiB: git grep reads a file whole before it tells a binary apart, so a large archive would take its size in memory on every refresh.
+// The `./` keeps a path starting with `-` from reading as an option.
+export const countableArgs = (paths) => [...paths.map((path) => `./${path}`), "-maxdepth", "0", "-size", "-2048k", "-print0"];
+
+// The paths `find` printed for countableArgs, as pathspecs for `git grep`.
+export const parseCountable = (stdout) => stdout.split("\0").filter(Boolean).map((path) => `:(literal)${path}`);
+
 // `git grep --untracked -c -I -z ''` as line counts by path, which `git diff --numstat` leaves out for untracked files; binaries and empty files print nothing.
 export function lineCounts(stdout) {
   const counts = {};

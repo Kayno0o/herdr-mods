@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { CURRENT, FIND_TILIDRC, labelsOf, lanesOf, lineCounts, LOG_FORMAT, logArgs, parseLog, shortAge, ticketLink, tilidUrl, trackerOf } from './graph.js'
+import { countableArgs, CURRENT, FIND_TILIDRC, labelsOf, lanesOf, lineCounts, LOG_FORMAT, logArgs, parseCountable, parseLog, shortAge, ticketLink, tilidUrl, trackerOf } from './graph.js'
 
 // Run from the pre-commit hook, git's own GIT_DIR, GIT_INDEX_FILE and author would point the test repo's commands at this one.
 const gitEnv = Object.fromEntries(Object.entries(Bun.env).filter(([key]) => !key.startsWith('GIT_')))
@@ -140,18 +140,26 @@ describe('parseLog against git', () => {
   })
 })
 
-test('lineCounts reads git grep\'s counts of untracked files, binaries left out', () => {
+test('lineCounts reads git grep\'s counts of the untracked files under 2 MiB, binaries left out', () => {
   const dir = mkdtempSync(join(tmpdir(), 'git-counts-'))
 
   try {
     Bun.spawnSync(['git', 'init', '-q'], { cwd: dir, env: gitEnv })
     writeFileSync(join(dir, 'a b.txt'), '1\n2\n3\n')
     writeFileSync(join(dir, '*.md'), 'x')
+    writeFileSync(join(dir, '-dash.txt'), 'x\ny\n')
     writeFileSync(join(dir, 'bin'), '\0\x01\x02')
-    const paths = ['a b.txt', '*.md', 'bin'].map(p => `:(literal)${p}`)
-    const r = Bun.spawnSync(['git', 'grep', '--untracked', '-c', '-I', '-z', '', '--', ...paths], { cwd: dir, env: gitEnv })
+    writeFileSync(join(dir, 'edge.txt'), 'x\n'.repeat(2047 * 512))
+    writeFileSync(join(dir, 'big.txt'), 'x\n'.repeat(2048 * 512))
+    const found = Bun.spawnSync(['find', ...countableArgs(['a b.txt', '*.md', '-dash.txt', 'bin', 'edge.txt', 'big.txt'])], { cwd: dir, env: gitEnv })
+    const r = Bun.spawnSync(['git', 'grep', '--untracked', '-c', '-I', '-z', '', '--', ...parseCountable(found.stdout.toString())], { cwd: dir, env: gitEnv })
 
-    expect(lineCounts(r.stdout.toString())).toEqual({ 'a b.txt': { add: 3, del: 0, binary: false }, '*.md': { add: 1, del: 0, binary: false } })
+    expect(lineCounts(r.stdout.toString())).toEqual({
+      'a b.txt': { add: 3, del: 0, binary: false },
+      '*.md': { add: 1, del: 0, binary: false },
+      '-dash.txt': { add: 2, del: 0, binary: false },
+      'edge.txt': { add: 1048064, del: 0, binary: false },
+    })
   }
   finally { rmSync(dir, { recursive: true, force: true }) }
 })
