@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { countableArgs, CURRENT, FIND_TILIDRC, labelsOf, lanesOf, lineCounts, LOG_FORMAT, logArgs, parseCountable, parseLog, shortAge, ticketLink, tilidUrl, trackerOf } from './graph.js'
+import { commitRows, countableArgs, CURRENT, fileTree, FIND_TILIDRC, labelsOf, lanesOf, lineCounts, LOG_FORMAT, logArgs, parseCountable, parseLog, patchChunks, shortAge, ticketLink, tilidUrl, trackerOf } from './graph.js'
 
 // Run from the pre-commit hook, git's own GIT_DIR, GIT_INDEX_FILE and author would point the test repo's commands at this one.
 const gitEnv = Object.fromEntries(Object.entries(Bun.env).filter(([key]) => !key.startsWith('GIT_')))
@@ -246,4 +246,71 @@ test('a .tilidrc above the repo or its main checkout names the Tilid project tic
     expect(sh(join(dir, 'wt'), FIND_TILIDRC)).toBe('')
   }
   finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+describe('patchChunks', () => {
+  test('cuts a commit patch per file, from the first hunk, saying why when a file has none', () => {
+    const patch = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      'index 1..2 100644',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      'diff --git a/logo.png b/logo.png',
+      'Binary files a/logo.png and b/logo.png differ',
+      'diff --git a/run.sh b/run.sh',
+      'old mode 100644',
+      'new mode 100755',
+      '',
+    ].join('\n')
+
+    expect(patchChunks(patch)).toEqual([['@@ -1 +1 @@', '-old', '+new'], ['Binary file · no text diff'], ['No text diff']])
+  })
+})
+
+describe('fileTree', () => {
+  const file = (path: string) => ({ path, status: 'M', add: 1, del: 0 })
+
+  test('nests files under their folders, folders first, a folder holding one folder alone merged into it', () => {
+    const { rows, order } = fileTree([file('src/lib/deep/x.ts'), file('README.md'), file('src/a.ts'), file('src/lib/deep/y.ts'), file('docs/b.md')])
+
+    expect(rows.map(r => `${'  '.repeat(r.depth)}${r.name}${r.file ? '' : '/'}`)).toEqual([
+      'docs/',
+      '  b.md',
+      'src/',
+      '  lib/deep/',
+      '    x.ts',
+      '    y.ts',
+      '  a.ts',
+      'README.md',
+    ])
+    expect(order.map(f => f.path)).toEqual(['docs/b.md', 'src/lib/deep/x.ts', 'src/lib/deep/y.ts', 'src/a.ts', 'README.md'])
+  })
+})
+
+describe('commitRows', () => {
+  test('stacks each file as a header then its numbered diff rows, noting where each file starts', () => {
+    const a = { path: 'a.ts', status: 'M', add: 1, del: 1, lines: ['@@ -3 +3 @@', '-old', '+new'] }
+    const b = { path: 'b.png', status: 'A', add: 0, del: 0, lines: ['Binary file · no text diff'] }
+    const { rows, starts } = commitRows([a, b])
+
+    expect(rows).toEqual([
+      { kind: 'file', file: a },
+      { kind: '@', text: '@@ -3 +3 @@' },
+      { kind: '-', number: 3, text: 'old' },
+      { kind: '+', number: 3, text: 'new' },
+      { kind: 'file', file: b },
+      { kind: '', text: 'Binary file · no text diff' },
+    ])
+    expect(starts).toEqual([0, 4])
+  })
+
+  test('leaves out the diffs past its line budget, keeping every file\'s header', () => {
+    const file = (path: string) => ({ path, status: 'M', add: 3, del: 0, lines: ['@@ -0,0 +1,3 @@', '+1', '+2', '+3'] })
+    const { rows } = commitRows([file('a'), file('b')], 5)
+
+    expect(rows.map(r => r.kind === 'file' ? r.file.path : r.text)).toEqual(['a', '@@ -0,0 +1,3 @@', '1', '2', '3', 'b', 'Diff left out: the commit is too large to show whole'])
+  })
 })

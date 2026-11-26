@@ -2,9 +2,9 @@
 // Right-click a row for git's actions on its commit and on each label it carries, double-click it to check out its branch; menus and dialogs are overlays of this mod (overlay.js).
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { agents, spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
-import { CURRENT, logArgs, parseLog, SEARCH_DEPTH, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
+import { CURRENT, logArgs, parseLog, SEARCH_DEPTH, lanesOf, labelsOf, shortAge, fullDate, diffRows, cut, patchChunks, fileTree, commitRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
 import { CHANGED, Menu, Dialog, act, openMenu, openDialog, runPlan } from "./overlay.js";
 import { plan } from "./actions.js";
 import { BUN, CLI } from "./paths.js";
@@ -22,7 +22,7 @@ const key = () => JSON.stringify({ ...location(), picks: shared(PICKS) ?? null }
 // the folder watch would see it, and every refresh would start the next one.
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const countLines = (text) => text ? text.split("\n").length - Number(text.endsWith("\n")) : 0;
-const cut = (lines) => lines.slice(0, 1500).map((line) => line.length > 4000 ? line.slice(0, 4000) + "… (line truncated)" : line);
+const statusColour = (status, t) => status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.blocked;
 
 const LANE_KEYS = ["accent", "ansi2", "ansi5", "ansi3", "ansi6", "ansi1", "ansi4"];
 const LANE_W = 12;
@@ -31,6 +31,9 @@ const PAGE = 300;
 const MORE = "more";
 const SETTINGS = "git.graph";
 const MAX_DETAILS = 200;
+const DIFF_ROW_H = 20;
+const FILE_HEADER_H = 30;
+const TREE_W = 280;
 const ICON = (name) => `mods/git/${name}.svg`;
 const clip = (name) => name.length > 22 ? `${name.slice(0, 21)}…` : name;
 const REVIEWS_EVERY_MS = 30000;
@@ -57,6 +60,7 @@ export default class Git extends View {
     if (p.menu) { this.overlay = new Menu(p.menu); return; }
     if (p.dialog) { this.overlay = new Dialog(p.dialog, cx); return; }
     this.files = []; this.rows = []; this.diffWidth = 0; this.hasHead = false; this.message = ""; this.handle = cx.focus_handle();
+    this.commitView = null; this.commitScroll = VirtualListScrollHandle.new();
     this.limit = PAGE; this.details = new Map(); this.families = new Map(); this.height = 0; this.changedSeen = shared(CHANGED);
     this.async = cx;
     this.input = InputState.new({ placeholder: "Commit message" });
@@ -225,7 +229,7 @@ export default class Git extends View {
   clear() {
     this.root = null; this.on = null; this.family = null; this.files = []; this.open = null; this.watched = new Set(); this.limited = false;
     this.branch = null; this.branches = []; this.remotes = []; this.behind = 0; this.ahead = 0; this.hasUpstream = false; this.picking = false;
-    this.graph = null; this.more = false; this.headHash = null; this.selected = null; this.details = new Map(); this.commitFile = null;
+    this.graph = null; this.more = false; this.headHash = null; this.selected = null; this.details = new Map(); this.commitFile = null; this.commitView = null;
     this.setLines([]);
   }
 
@@ -287,40 +291,52 @@ export default class Git extends View {
     cx.notify();
   }
 
-  // A commit's body, committer and files, kept for the last few looked at; the first file's diff shows.
+  // A commit's body, committer and files, kept for the last few looked at, and its whole patch, stacked file by file in the tree's order.
   showCommit(hash, cx) {
     const root = this.root, on = this.on, context = this.context;
-    this.commitFile = null; this.setLines([]);
-    const known = this.details.get(hash);
-    if (known) { if (known.files.length) this.pickCommitFile(known.files[0].path, cx); return; }
+    this.commitFile = null; this.commitView = null;
     cx.spawn(async (cx) => {
       const show = (...flags) => exec("git", [...READ, "show", "--first-parent", "--no-renames", "--no-color", "--no-ext-diff", ...flags, hash], { cwd: root, on });
-      const [info, names, numbers] = await Promise.all([show("-s", "--format=%B%x00%cn%x00%ce%x00%an%x00%ae"), show("--format=", "--name-status", "-z"), show("--format=", "--numstat", "-z")]);
+      const known = this.details.get(hash);
+      let details, patch;
+      try { [details, patch] = await Promise.all([known ?? this.readDetails(show), show("--format=", "--patch", "--no-textconv")]); }
+      catch (e) { if (key() === context && this.selected === hash) { this.note = `Cannot read this commit: ${e}`; cx.notify(); } return; }
       if (key() !== context) return;
-      const [body, committer, committerEmail, author, email] = info.stdout.split("\0");
-      const stats = numstat([numbers.stdout]);
-      const tokens = names.stdout.split("\0").filter(Boolean), files = [];
-      for (let i = 0; i + 1 < tokens.length; i += 2) files.push({ path: tokens[i + 1], status: tokens[i][0], ...(stats[tokens[i + 1]] ?? { add: 0, del: 0 }) });
-      const lines = body.trim().split("\n");
-      this.details.set(hash, { body: lines.slice(1).join("\n").trim(), committer: committer !== author || committerEmail?.trim() !== email?.trim() ? `${committer} <${committerEmail?.trim()}>` : null, files });
-      if (this.details.size > MAX_DETAILS) this.details.delete(this.details.keys().next().value);
-      if (this.selected === hash && files.length) this.pickCommitFile(files[0].path, cx);
+      if (!known) {
+        this.details.set(hash, details);
+        if (this.details.size > MAX_DETAILS) this.details.delete(this.details.keys().next().value);
+      }
+      if (this.selected === hash) this.commitView = this.viewOf(hash, details.files, patch.stdout);
       cx.notify();
     });
     cx.notify();
   }
 
-  pickCommitFile(path, cx) {
-    const root = this.root, on = this.on, context = this.context, hash = this.selected;
-    this.commitFile = path; this.setLines([]);
-    cx.spawn(async (cx) => {
-      const r = await exec("git", [...READ, "show", "--format=", "--first-parent", "--no-ext-diff", "--no-textconv", "--no-color", hash, "--", path], { cwd: root, on });
-      if (key() === context && this.selected === hash && this.commitFile === path) {
-        const all = r.stdout.replace(/\n$/, "").split("\n"), first = all.findIndex((l) => l.startsWith("@@"));
-        this.setLines(cut(first < 0 ? ["No text diff available"] : all.slice(first)));
-      }
-      cx.notify();
-    });
+  async readDetails(show) {
+    const [info, names, numbers] = await Promise.all([show("-s", "--format=%B%x00%cn%x00%ce%x00%an%x00%ae"), show("--format=", "--name-status", "-z"), show("--format=", "--numstat", "-z")]);
+    const [body, committer, committerEmail, author, email] = info.stdout.split("\0");
+    const stats = numstat([numbers.stdout]);
+    const tokens = names.stdout.split("\0").filter(Boolean), files = [];
+    for (let i = 0; i + 1 < tokens.length; i += 2) files.push({ path: tokens[i + 1], status: tokens[i][0], ...(stats[tokens[i + 1]] ?? { add: 0, del: 0 }) });
+    const lines = body.trim().split("\n");
+    return { body: lines.slice(1).join("\n").trim(), committer: committer !== author || committerEmail?.trim() !== email?.trim() ? `${committer} <${committerEmail?.trim()}>` : null, files };
+  }
+
+  // The patch's chunks come in git's file order, the same as --name-status lists them.
+  viewOf(hash, files, patch) {
+    const chunks = patchChunks(patch);
+    const { rows: tree, order } = fileTree(files.map((f, i) => ({ ...f, lines: chunks[i] ?? ["No text diff"] })));
+    const { rows, starts } = commitRows(order);
+    let width = 300;
+    for (const row of rows) if (row.text) width = Math.max(width, row.text.length * 7 + 50);
+    return { hash, tree, starts, rows, width, heights: rows.map((row) => row.kind === "file" ? FILE_HEADER_H : DIFF_ROW_H), index: new Map(order.map((f, i) => [f, i])) };
+  }
+
+  jumpTo(file, cx) {
+    const view = this.commitView, i = view?.index.get(file);
+    if (i === undefined) return;
+    this.commitFile = file.path;
+    this.commitScroll.scroll_to_item(view.starts[i], "top");
     cx.notify();
   }
 
@@ -464,7 +480,7 @@ export default class Git extends View {
     const parts = f.path.split("/"), name = parts.pop();
     return h_flex().id(`file-${f.path}`).h(26).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().when(picked, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => onPick(cx))
       .when(Boolean(stage), (e) => e.child(div().id(`stage-${f.path}`).w(16).h(16).flex_none().flex().items_center().justify_center().rounded(4).border_1().border_color(f.staged ? t.accent : t.border).text_size(10).text_color(t.accent).cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); stage(cx); }).child(f.staged ? "✓" : "")))
-      .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" || f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
+      .child(div().w(14).text_size(11).text_color(statusColour(f.status, t)).child(f.status))
       .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
       .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
   }
@@ -511,10 +527,39 @@ export default class Git extends View {
           return e.child(h_flex().id("in-review").gap(8).cursor_pointer().tooltip("Open it in the Review tab").on_click(() => openReview({ item: review.key, commit: row.hash, root: this.root }))
             .child(div().w(58).flex_none().text_color(t.dim).child("Review"))
             .child(div().text_color(review.open ? t.ansi3 : review.approved ? t.ansi2 : t.accent).child(review.open ? `${review.label} · ${review.open} open ${review.open === 1 ? "note" : "notes"}` : review.approved ? `${review.label} · approved` : review.label)));
-        }))
-      .child(info
-        ? this.fileList("commit-files", 130, info.files.map((f) => this.fileRow(f, this.commitFile === f.path, t, (cx) => this.pickCommitFile(f.path, cx))))
-        : div().px(12).pb(8).text_size(11).text_color(t.dim).child("Loading files…"));
+        }));
+  }
+
+  // The picked commit the way Review shows a change: its files as a tree to jump from, every diff stacked beside it in the tree's order.
+  commitBody(t) {
+    const view = this.commitView?.hash === this.selected ? this.commitView : null;
+    const empty = (text) => div().flex_1().min_h(0).px(12).py(8).text_size(11).text_color(t.dim).child(text);
+    if (!view) return empty("Loading files…");
+    if (!view.rows.length) return empty("No file changed");
+    const counts = (f) => [f.add > 0 && div().flex_none().text_size(11).text_color(t.ansi2).child(`+${f.add}`), f.del > 0 && div().flex_none().text_size(11).text_color(t.ansi1).child(`−${f.del}`)].filter(Boolean);
+    const tree = v_flex().id("commit-tree").w(TREE_W).flex_none().h_full().overflow_y_scrollbar().p(4).border_r(1).border_color(t.border).text_size(12)
+      .children(view.tree.map((r, i) => r.file
+        ? h_flex().id(`tree-${r.file.path}`).h(24).flex_none().pl(8 + r.depth * 12).pr(8).gap(6).items_center().rounded(5).cursor_pointer()
+          .when(this.commitFile === r.file.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).tooltip(r.file.path).on_click((_e, cx) => this.jumpTo(r.file, cx))
+          .child(div().w(10).flex_none().text_size(10.5).text_color(statusColour(r.file.status, t)).child(r.file.status))
+          .child(div().flex_1().min_w(0).truncate().child(r.name))
+          .children(counts(r.file))
+        : div().id(`tree-dir-${i}`).h(24).flex_none().pl(8 + r.depth * 12).pr(8).flex().items_center().text_color(t.dim).child(div().truncate().child(`${r.name}/`))));
+    const header = (f) => {
+      const parts = f.path.split("/"), name = parts.pop();
+      return h_flex().w_full().h(FILE_HEADER_H).flex_none().px(12).gap(8).items_center().border_t(1).border_b(1).border_color(t.border).bg(t.chrome)
+        .child(div().w(12).flex_none().text_size(11).text_color(statusColour(f.status, t)).child(f.status))
+        .child(div().flex_none().text_size(12).text_color(t.dim).child(parts.length ? `${parts.join("/")}/` : ""))
+        .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(name))
+        .children(counts(f));
+    };
+    return h_flex().flex_1().min_h(0)
+      .child(tree)
+      .child(div().flex_1().min_w(0).h_full().relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
+        .child(div().id("commit-diff-x").size_full().overflow_x_scrollbar()
+          .child(div().w_full().min_w(view.width).h_full().child(v_virtual_list("commit-diff", view.rows.length, view.heights, (i) => String(i),
+            (range) => view.rows.slice(range.start, range.end).map((row) => row.kind === "file" ? header(row.file) : this.diffRow(row, t))).size_full().track_scroll(this.commitScroll))))
+        .child(Scrollbar.vertical("commit-diff").viewport_from_layout().absolute().inset_0()));
   }
 
   diffRow({ kind, number, text }, t) {
@@ -578,12 +623,12 @@ export default class Git extends View {
         .child(div().id("new-branch").h(28).px(8).flex().items_center().rounded(6).border_1().border_color(t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.branchInput).h_full().text_size(12).text_color(t.foreground)))))
       .child(this.graphList(t))
       .when(current, (e) => e.child(this.currentFiles(t)))
-      .when(!current, (e) => e.child(this.commitDetails(t)))
-      .child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
+      .when(!current, (e) => e.child(this.commitDetails(t)).child(this.commitBody(t)))
+      .when(current, (e) => e.child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
         .child(div().id("changes-diff-x").size_full().overflow_x_scrollbar()
-          .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
+          .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, DIFF_ROW_H, (i) => String(i),
             (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
-        .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0()))
+        .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())))
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
       .when(current, (e) => e.child(h_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border)
         .child(div().id("commit-message").flex_1().min_w(0).h(32).px(10).flex().items_center().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.input).h_full().text_size(12).text_color(t.foreground)))

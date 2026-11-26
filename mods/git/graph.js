@@ -125,6 +125,68 @@ export function diffRows(lines) {
   });
 }
 
+// A diff's lines kept to what a list draws quickly: the first 1500, none longer than 4000 characters.
+export const cut = (lines) => lines.slice(0, 1500).map((line) => line.length > 4000 ? line.slice(0, 4000) + "… (line truncated)" : line);
+
+// `git show -p` without renames, one array per file in git's order: its lines from the first hunk on, or one line saying why it has none.
+export function patchChunks(stdout) {
+  const chunks = [];
+  for (const line of stdout.replace(/\n$/, "").split("\n")) {
+    if (line.startsWith("diff --git ")) chunks.push({ lines: [], binary: false });
+    const chunk = chunks.at(-1);
+    if (!chunk) continue;
+    if (chunk.lines.length || line.startsWith("@@")) chunk.lines.push(line);
+    else if (line.startsWith("Binary files ")) chunk.binary = true;
+  }
+  return chunks.map(({ lines, binary }) => lines.length ? lines : [binary ? "Binary file · no text diff" : "No text diff"]);
+}
+
+// A commit's files as tree rows, folders first and by name, a folder holding nothing but one folder merged into it ("lib/deep"); `order` is its files top to bottom.
+export function fileTree(files) {
+  const root = { dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split("/"), name = parts.pop();
+    let node = root;
+    for (const part of parts) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), files: [] });
+      node = node.dirs.get(part);
+    }
+    node.files.push({ name, file });
+  }
+  const rows = [], order = [];
+  const walk = (node, depth) => {
+    for (let [name, dir] of [...node.dirs].sort(([a], [b]) => a.localeCompare(b))) {
+      while (dir.files.length === 0 && dir.dirs.size === 1) {
+        const [[inner, next]] = dir.dirs;
+        name = `${name}/${inner}`; dir = next;
+      }
+      rows.push({ name, depth });
+      walk(dir, depth + 1);
+    }
+    for (const { name, file } of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
+      rows.push({ name, depth, file });
+      order.push(file);
+    }
+  };
+  walk(root, 0);
+  return { rows, order };
+}
+
+// Every file of a commit stacked as a header row then its numbered diff rows, the diffs past `budget` lines left out; `starts` is each file's header index.
+export function commitRows(files, budget = 20000) {
+  const rows = [], starts = [];
+  let left = budget;
+  for (const file of files) {
+    starts.push(rows.length);
+    rows.push({ kind: "file", file });
+    const lines = cut(file.lines);
+    if (lines.length > left) { rows.push({ kind: "", text: "Diff left out: the commit is too large to show whole" }); left = 0; continue; }
+    left -= lines.length;
+    rows.push(...diffRows(lines));
+  }
+  return { rows, starts };
+}
+
 // `git diff --numstat -z` (without renames) as added and removed lines by path; several outputs add up.
 export function numstat(outputs) {
   const stats = {};
