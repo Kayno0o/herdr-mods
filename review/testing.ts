@@ -16,6 +16,8 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'ms-playwright')
 process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), 'review-cache-'))
 process.env.HERDR_MODS_CONFIG = mkdtempSync(join(tmpdir(), 'review-config-'))
+// `art compare` lists every page it writes in its gallery, which would fill the person's with test pages
+process.env.ART_DATA = mkdtempSync(join(tmpdir(), 'review-art-'))
 
 export function makeRepo(name = 'repo') {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'review-')))

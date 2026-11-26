@@ -45,4 +45,12 @@ describe.skipIf(!Bun.which('art'))('writeCompare', () => {
     expect(writeCompare(inboxWith([shot('s001', { error: 'before: blank page' })]), '#7', '#7')).toBeNull()
     expect(existsSync(comparePage('APP', '#7'))).toBe(false)
   })
+
+  test('lists its page in a throwaway gallery, never the person\'s own', () => {
+    const out = writeCompare(inboxWith([shot('s001')]), '#7', '#7')!
+    const registry = join(process.env.ART_DATA ?? '/missing', 'pages.json')
+
+    expect(process.env.ART_DATA!.startsWith(tmpdir())).toBe(true)
+    expect(readFileSync(registry, 'utf8')).toContain(JSON.stringify(out))
+  })
 })

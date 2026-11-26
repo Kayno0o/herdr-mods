@@ -21,7 +21,7 @@ export function writeCompare(inbox: Inbox, item: string, title: string): string 
   }
 
   const dir = shotsDir(inbox.project)
-  const run = Bun.spawnSync([art, 'compare', ...pairs.flatMap(s => [join(dir, s.before!), join(dir, s.after!)]), ...pairs.map(s => `--label=${s.label}`), `--title=${title}`, `--out=${out}`], { stdout: 'pipe', stderr: 'pipe' })
+  const run = Bun.spawnSync([art, 'compare', ...pairs.flatMap(s => [join(dir, s.before!), join(dir, s.after!)]), ...pairs.map(s => `--label=${s.label}`), `--title=${title}`, `--out=${out}`], { stdout: 'pipe', stderr: 'pipe', env: process.env })
 
   if (run.exitCode !== 0)
     throw new Error(`art compare failed: ${run.stderr.toString().trim()}`)

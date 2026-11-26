@@ -42,7 +42,7 @@ export function dirsOf(command: string, cwd: string): string[] {
 }
 
 function git(dir: string, ...args: string[]) {
-  const r = Bun.spawnSync(['git', '-C', dir, ...args], { stdout: 'pipe', stderr: 'ignore' })
+  const r = Bun.spawnSync(['git', '-C', dir, ...args], { stdout: 'pipe', stderr: 'ignore', env: process.env })
 
   return r.exitCode === 0 ? r.stdout.toString().trim() : null
 }
