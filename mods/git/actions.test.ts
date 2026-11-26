@@ -20,6 +20,12 @@ describe('menuFor', () => {
     expect(ids(menuFor({ type: 'commit', hash: 'a', subject: 's', head: true }, ctx))).toEqual(['tag', 'branch', 'revert', 'reset', 'copy-hash', 'copy-subject'])
   })
 
+  test('a branch tip\'s commit leaves merge and rebase to its branch\'s section', () => {
+    expect(ids(menuFor({ type: 'commit', hash: 'a', subject: 's', head: false, tip: true }, ctx))).toEqual(['tag', 'branch', 'checkout-commit', 'cherry-pick', 'revert', 'reset', 'copy-hash', 'copy-subject'])
+    expect(ids(menuFor({ type: 'commit', hash: 'a', subject: 's', head: false, tip: false }, ctx))).toEqual(['tag', 'branch', 'checkout-commit', 'cherry-pick', 'revert', 'merge', 'rebase', 'reset', 'copy-hash', 'copy-subject'])
+    expect(ids(menuFor({ type: 'remote', name: 'origin/x', remote: 'origin', branch: 'x', local: false }, ctx))).toEqual(['checkout-remote', 'merge', 'rebase', 'delete-remote', 'copy-name'])
+  })
+
   test('push needs a remote', () => {
     expect(ids(menuFor({ type: 'tag', name: 'v1' }, { branch: 'main', remotes: [] }))).toEqual(['delete-tag', 'copy-name'])
   })

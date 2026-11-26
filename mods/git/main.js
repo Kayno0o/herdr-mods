@@ -338,8 +338,10 @@ export default class Git extends View {
   // A row's menu: its commit (or Current), then a section per branch, remote branch and tag on it.
   sectionsOf(row) {
     if (row.current) return [{ title: "Current", target: { type: "current", staged: this.files.some((f) => f.staged) } }];
-    const sections = [{ title: `Commit ${row.hash.slice(0, 8)}`, target: { type: "commit", hash: row.hash, subject: row.subject, head: row.hash === this.headHash, merge: row.merge } }];
-    for (const label of labelsOf(row.refs, this.remotes)) {
+    // A branch tip merges and rebases from its branch's section, by name, rather than twice.
+    const labels = labelsOf(row.refs, this.remotes), tip = labels.some((l) => l.kind === "branch" || l.kind === "remote");
+    const sections = [{ title: `Commit ${row.hash.slice(0, 8)}`, target: { type: "commit", hash: row.hash, subject: row.subject, head: row.hash === this.headHash, merge: row.merge, tip } }];
+    for (const label of labels) {
       if (label.kind === "branch") sections.push({ title: `Branch ${label.name}`, target: { type: "branch", name: label.name, head: label.head, remotes: label.remotes } });
       if (label.kind === "remote") sections.push({ title: `Remote ${label.name}`, target: { type: "remote", name: label.name, remote: label.remote, branch: label.branch, local: this.branches.includes(label.branch) } });
       if (label.kind === "tag") sections.push({ title: `Tag ${label.name}`, target: { type: "tag", name: label.name } });

@@ -1,5 +1,5 @@
 // What a right-click on the graph offers, the dialog an action asks first, and the git commands it runs.
-// A target is { type: "branch", name, head, remotes } | { type: "remote", name, remote, branch, local } | { type: "tag", name } | { type: "commit", hash, subject, head, merge } | { type: "current", staged }; ctx is { branch, remotes }.
+// A target is { type: "branch", name, head, remotes } | { type: "remote", name, remote, branch, local } | { type: "tag", name } | { type: "commit", hash, subject, head, merge, tip } (tip when a branch or remote branch points at it) | { type: "current", staged }; ctx is { branch, remotes }.
 
 const SEP = { id: "", label: "", danger: false, sep: true };
 const item = (id, label, danger = false) => ({ id, label, danger, sep: false });
@@ -22,6 +22,7 @@ export function menuFor(target, ctx) {
     case "remote": return [
       item("checkout-remote", "Checkout…"),
       item("merge", `Merge into ${onto(ctx)}…`),
+      item("rebase", `Rebase ${onto(ctx)} on it…`),
       item("delete-remote", "Delete remote branch…", true),
       SEP,
       item("copy-name", "Copy name"),
@@ -39,7 +40,7 @@ export function menuFor(target, ctx) {
       SEP,
       ...(target.head ? [] : [item("cherry-pick", "Cherry pick…")]),
       item("revert", "Revert…"),
-      ...(target.head ? [] : [item("merge", `Merge into ${onto(ctx)}…`), item("rebase", `Rebase ${onto(ctx)} on it…`)]),
+      ...(target.head || target.tip ? [] : [item("merge", `Merge into ${onto(ctx)}…`), item("rebase", `Rebase ${onto(ctx)} on it…`)]),
       item("reset", `Reset ${onto(ctx)} to here…`, true),
       SEP,
       item("copy-hash", "Copy hash"),
