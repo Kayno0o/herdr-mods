@@ -4,7 +4,7 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { agents, spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
-import { CURRENT, logArgs, parseLog, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
+import { CURRENT, logArgs, parseLog, SEARCH_DEPTH, lanesOf, labelsOf, shortAge, fullDate, diffRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
 import { CHANGED, Menu, Dialog, act, openMenu, openDialog, runPlan } from "./overlay.js";
 import { plan } from "./actions.js";
 import { BUN, CLI } from "./paths.js";
@@ -34,6 +34,7 @@ const MAX_DETAILS = 200;
 const ICON = (name) => `mods/git/${name}.svg`;
 const clip = (name) => name.length > 22 ? `${name.slice(0, 21)}…` : name;
 const REVIEWS_EVERY_MS = 30000;
+const SEARCH_DELAY_MS = 200;
 // The review mod opens or reuses the space's Review tab on what this asks for.
 const openReview = (extra) => { setShared("review.request", { ...extra, at: Date.now() }); run("review.request"); };
 // The forges and default Tilid instance of the user's config, kept once read: they change only when the user edits it, and a reload of the mod picks that up. A failed read is asked again by the next repo.
@@ -67,6 +68,15 @@ export default class Git extends View {
     this.input.on("submit", (_e, cx) => this.commit(cx));
     this.branchInput = InputState.new({ placeholder: "New branch, Enter to create" });
     this.branchInput.on("submit", (_e, cx) => { const name = this.branchInput.value().trim(); if (name) { this.branchInput.set_value(""); this.act("Create branch", ["switch", "-c", name], cx); } });
+    this.query = "";
+    this.searchInput = InputState.new({ placeholder: "Search commits" });
+    // A search runs once typing pauses, rather than a git log per key.
+    this.searchInput.on("change", () => {
+      const value = this.searchInput.value();
+      this.async.timer.after(SEARCH_DELAY_MS, (cx) => { if (this.searchInput.value() === value) this.search(value, cx); });
+    });
+    this.searchInput.on("focus", (_e, cx) => { this.searching = true; cx.notify(); });
+    this.searchInput.on("blur", (_e, cx) => { this.searching = false; cx.notify(); });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.clear();
@@ -100,10 +110,11 @@ export default class Git extends View {
     if (context !== this.context) {
       this.context = context; this.clear();
       this.message = ""; this.input.set_value(""); this.error = null; this.note = null;
+      this.query = ""; this.searchInput.set_value("");
     }
     if (!cwd) return;
     this.loading = true; this.again = false;
-    const { scope, remotes } = this.graphSettings, limit = this.limit;
+    const { scope, remotes } = this.graphSettings, limit = this.limit, query = this.query;
     cx.spawn(async (cx) => {
       try {
         const topArgs = ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"];
@@ -141,20 +152,25 @@ export default class Git extends View {
         }
         const [branch, list, counts, remoteList, log] = await Promise.all([
           git(["branch", "--show-current"]), git(["branch", "--format=%(refname:short)"]), git(["rev-list", "--left-right", "--count", "@{u}...HEAD"]), git(["remote"]),
-          hasHead ? git(logArgs({ scope, remotes, limit })) : Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+          hasHead ? git(logArgs({ scope, remotes, limit, query })) : Promise.resolve({ code: 0, stdout: "", stderr: "" }),
         ]);
         if (key() !== context) return;
         if (log.code !== 0) throw new Error(log.stderr);
         const [behind, ahead] = counts.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
-        const { commits, more } = parseLog(log.stdout, limit);
+        const { commits, more, partial } = parseLog(log.stdout, limit, query);
         const headHash = hasHead ? head.stdout.trim() : null;
         const add = files.reduce((n, f) => n + f.add, 0), del = files.reduce((n, f) => n + f.del, 0);
-        const current = files.length ? [{ hash: CURRENT, current: true, parents: headHash ? [headHash] : [], subject: "Current", add, del, refs: "" }] : [];
+        const current = files.length && !query ? [{ hash: CURRENT, current: true, parents: headHash ? [headHash] : [], subject: "Current", add, del, refs: "" }] : [];
+        // A search's matches skip the commits between them, so they list on one lane with no strokes.
+        const graph = query ? { rows: commits.map((c) => ({ ...c, col: 0, n: 1, segs: [], merge: c.parents.length > 1 })), width: 1 } : lanesOf([...current, ...commits]);
         Object.assign(this, {
-          root, on, hasHead, files, headHash, more, limited: entries.length > 1000, error: null,
+          root, on, hasHead, files, headHash, more, partial, limited: entries.length > 1000, error: null,
           branch: branch.stdout.trim() || null, branches: list.stdout.split("\n").filter(Boolean), remotes: remoteList.stdout.split("\n").filter(Boolean),
-          behind, ahead, hasUpstream: counts.code === 0, graph: lanesOf([...current, ...commits]),
+          behind, ahead, hasUpstream: counts.code === 0, graph,
         });
+        // A search whose matches leave out the commit picked shows its first match.
+        const lost = Boolean(query) && commits.length > 0 && !commits.some((c) => c.hash === this.selected);
+        if (lost) { this.selected = commits[0].hash; this.note = null; }
         this.watch([root, ...(common && !common.startsWith(`${root}/`) ? [common] : [])], cx);
         if (this.trackerRoot !== root) cx.spawn((cx) => this.findTracker(root, on, cx));
         if (!on && (this.reviewsRoot !== root || Date.now() - this.reviewsAt > REVIEWS_EVERY_MS)) cx.spawn((cx) => this.findReviews(root, cx));
@@ -167,7 +183,7 @@ export default class Git extends View {
             try { await this.load(this.open, context); }
             catch { if (key() === context) this.setLines(["Cannot preview this diff (too large or unreadable)"]); }
           } else this.setLines([]);
-        } else if (this.selected && !this.details.has(this.selected)) this.showCommit(this.selected, cx);
+        } else if (this.selected && (lost || !this.details.has(this.selected))) this.showCommit(this.selected, cx);
       } catch (e) { if (key() === context) this.error = String(e); }
       finally { this.loading = false; cx.notify(); if (this.again) this.refresh(cx); }
     });
@@ -308,6 +324,13 @@ export default class Git extends View {
     cx.notify();
   }
 
+  search(value, cx) {
+    const query = value.trim();
+    if (query === this.query) return;
+    this.query = query; this.limit = PAGE; this.refresh(cx);
+    cx.notify();
+  }
+
   setting(change, cx) {
     setShared(SETTINGS, { ...this.graphSettings, ...change });
     this.limit = PAGE; this.refresh(cx);
@@ -342,8 +365,10 @@ export default class Git extends View {
   // A row's menu: its commit (or Current), then a section per branch, remote branch and tag on it.
   sectionsOf(row) {
     if (row.current) return [{ title: "Current", target: { type: "current", staged: this.files.some((f) => f.staged) } }];
-    const sections = [{ title: `Commit ${row.hash.slice(0, 8)}`, target: { type: "commit", hash: row.hash, subject: row.subject, head: row.hash === this.headHash, merge: row.merge } }];
-    for (const label of labelsOf(row.refs, this.remotes)) {
+    // A branch tip merges and rebases from its branch's section, by name, rather than twice.
+    const labels = labelsOf(row.refs, this.remotes), tip = labels.some((l) => l.kind === "branch" || l.kind === "remote");
+    const sections = [{ title: `Commit ${row.hash.slice(0, 8)}`, target: { type: "commit", hash: row.hash, subject: row.subject, head: row.hash === this.headHash, merge: row.merge, tip } }];
+    for (const label of labels) {
       if (label.kind === "branch") sections.push({ title: `Branch ${label.name}`, target: { type: "branch", name: label.name, head: label.head, remotes: label.remotes } });
       if (label.kind === "remote") sections.push({ title: `Remote ${label.name}`, target: { type: "remote", name: label.name, remote: label.remote, branch: label.branch, local: this.branches.includes(label.branch) } });
       if (label.kind === "tag") sections.push({ title: `Tag ${label.name}`, target: { type: "tag", name: label.name } });
@@ -409,6 +434,7 @@ export default class Git extends View {
       .when(head && !selected, (e) => e.bg(t[LANE_KEYS[row.col % LANE_KEYS.length]] + "14")).when(selected, (e) => e.bg(t.selected))
       .cursor_pointer().hover((x) => x.bg(t.hover))
       .child(this.graphCell(row, t, width))
+      .child(div().w(56).flex_none().font_family("JetBrains Mono").text_color(t.dim).child(row.current ? "" : row.hash.slice(0, 8)))
       .child(h_flex().flex_1().min_w(0).gap(5).items_center().overflow_hidden()
         .children(labels.map((label) => this.labelChip(label, row, t)))
         .child(div().flex_1().min_w(0).truncate().when(row.current || row.merge, (e) => e.text_color(t.muted)).when(head, (e) => e.font_semibold()).child(row.current ? `Current · ${this.files.length} files` : row.subject)))
@@ -418,14 +444,15 @@ export default class Git extends View {
 
   graphList(t) {
     const { rows = [], width = 1 } = this.graph ?? {};
-    const count = rows.length + (this.more ? 1 : 0);
+    const count = rows.length + (this.more || this.partial ? 1 : 0);
     // The last row drawn means the end scrolled into view: the next page loads after this render, which can't refresh itself.
     const more = () => { this.async.timer.after(0, (cx) => this.nextPage(cx)); return div(); };
     const item = (i) => i < rows.length ? this.graphRow(rows[i], t, width)
+      : !this.more ? div().h(ROW_H).flex_none().px(8).flex().items_center().text_color(t.dim).child(`Searched the latest ${SEARCH_DEPTH.toLocaleString("en")} commits`)
       : more().h(ROW_H).flex_none().px(8).flex().items_center().rounded(4).text_color(t.accent).cursor_pointer().hover((x) => x.bg(t.hover)).child(this.loading ? "Loading more commits…" : `Load ${PAGE} more commits`);
     return div().relative().h(Math.max(140, Math.round((this.height || 600) * 0.4))).flex_none().px(6).py(4).border_b(1).border_color(t.border)
       .font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
-      .when(!rows.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading…" : this.root ? "No commits yet" : "No folder"))))
+      .when(!rows.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading…" : !this.root ? "No folder" : this.query ? `No commit matches “${this.query}”` : "No commits yet"))))
       .when(rows.length > 0, (e) => e
         .child(v_virtual_list("graph", count, ROW_H, (i) => i < rows.length ? rows[i].hash : MORE, (range) => Array.from({ length: range.end - range.start }, (_, k) => item(range.start + k))).size_full()
           .on_item_click((key, cx) => this.rowClick(key, cx))
@@ -474,6 +501,11 @@ export default class Git extends View {
         .child(meta("Author", `${row.author} <${row.email}>`))
         .when(Boolean(info?.committer), (e) => e.child(meta("Committer", info.committer)))
         .child(meta("Date", `${fullDate(row.ts)} · ${shortAge(row.ts)}`))
+        .when(Boolean(info), (e) => e.child(h_flex().gap(8)
+          .child(div().w(58).flex_none().text_color(t.dim).child("Changes"))
+          .child(div().text_color(t.muted).child(`${info.files.length} ${info.files.length === 1 ? "file" : "files"}`))
+          .child(div().text_color(t.ansi2).child(`+${info.files.reduce((n, f) => n + f.add, 0)}`))
+          .child(div().text_color(t.ansi1).child(`−${info.files.reduce((n, f) => n + f.del, 0)}`))))
         .when(Boolean(this.reviews?.get(row.hash)), (e) => {
           const review = this.reviews.get(row.hash);
           return e.child(h_flex().id("in-review").gap(8).cursor_pointer().tooltip("Open it in the Review tab").on_click(() => openReview({ item: review.key, commit: row.hash, root: this.root }))
@@ -521,6 +553,7 @@ export default class Git extends View {
       .on_size_change((size, cx) => { const h = size.height / (Number(settings().zoom) || 1); if (Math.abs(h - this.height) > 1) { this.height = h; cx.notify(); } })
       .on_key_down((e, cx) => {
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
+        if (e.key === "escape" && this.searching) { this.searching = false; this.searchInput.set_value(""); this.search("", cx); this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
       .when(Boolean(this.family), (e) => e.child(this.repoSwitch(t)))
       .child(h_flex().h(42).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
@@ -536,7 +569,7 @@ export default class Git extends View {
         .when(this.remotes.length > 0 && scope !== "current", (e) => e.child(h_flex().id("remotes").ml(8).gap(5).items_center().text_size(11.5).text_color(t.muted).cursor_pointer().on_click((_e, cx) => this.setting({ remotes: !remotes }, cx))
           .child(div().size(13).flex().items_center().justify_center().rounded(3).border_1().border_color(remotes ? t.accent : t.border).when(remotes, (x) => x.bg(t.accent)).text_size(9).text_color(t.background).child(remotes ? "✓" : ""))
           .child("Remotes")))
-        .child(div().flex_1())
+        .child(div().id("search").flex_1().min_w(90).h(24).mx(6).px(8).flex().items_center().rounded(6).border_1().border_color(this.searching ? t.accent : t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.searchInput).h_full().text_size(11.5).text_color(t.foreground)))
         .child(this.button("review", "Review", () => openReview({ root: this.root }), t))
         .child(this.button("stash", "Stash", (cx) => this.act("Stash", ["stash", "push", "-u"], cx), t))
         .child(this.button("pop", "Pop", (cx) => this.act("Pop", ["stash", "pop"], cx), t)))

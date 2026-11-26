@@ -2,21 +2,28 @@
 
 export const CURRENT = "current";
 export const MAX_LANES = 10;
-export const LOG_FORMAT = "%x1f%H%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%at%x1f%D";
+// A record per commit, opened by \x1e since its body spans lines.
+export const LOG_FORMAT = "%x1e%x1f%H%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%cn%x1f%ce%x1f%b";
+// A search reads this many of the latest commits rather than a page.
+export const SEARCH_DEPTH = 20000;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // All branches walks the refs it shows rather than --all, which also walks other tools' refs (stash, checkpoints); one past the page says whether there is more.
-export function logArgs({ scope, remotes, limit }) {
+/** @param {{ scope: string, remotes: boolean, limit: number, query?: string }} options */
+export function logArgs({ scope, remotes, limit, query }) {
   const refs = scope === "current" ? ["HEAD"] : ["--branches", "--tags", ...(remotes ? ["--remotes"] : []), "HEAD"];
-  return ["log", "--date-order", "--decorate=full", "-n", String(limit + 1), `--format=${LOG_FORMAT}`, ...refs, "--"];
+  return ["log", "--date-order", "--decorate=full", "-n", String(query ? SEARCH_DEPTH : limit + 1), `--format=${LOG_FORMAT}`, ...refs, "--"];
 }
 
-export function parseLog(stdout, limit) {
-  const commits = stdout.split("\n").filter(Boolean).map((line) => {
-    const [, hash, parents, subject, author, email, ts, refs] = line.split("\x1f");
-    return { hash, parents: parents ? parents.split(" ") : [], subject, author, email, ts: Number(ts) || 0, refs: refs ?? "" };
+// A search keeps the commits whose hash starts with it or whose subject, body, author, committer or refs hold it, any case; partial when the commits read stopped at the depth.
+export function parseLog(stdout, limit, query = "", depth = SEARCH_DEPTH) {
+  const all = stdout.split("\x1e").filter((record) => record.trim()).map((record) => {
+    const [, hash, parents, subject, author, email, ts, refs, committer, committerEmail, body] = record.split("\x1f");
+    return { hash, parents: parents ? parents.split(" ") : [], subject, author, email, ts: Number(ts) || 0, refs: refs ?? "", committer, committerEmail, body: body?.trim() ?? "" };
   });
-  return { commits: commits.slice(0, limit), more: commits.length > limit };
+  const q = query.trim().toLowerCase();
+  const commits = q ? all.filter((c) => c.hash.startsWith(q) || [c.subject, c.body, c.author, c.email, c.committer, c.committerEmail, c.refs].some((field) => field?.toLowerCase().includes(q))) : all;
+  return { commits: commits.slice(0, limit), more: commits.length > limit, partial: Boolean(q) && all.length >= depth };
 }
 
 // Puts each commit (newest first, a child before its parents) on a lane. A lane waits for the commit it leads to; a commit takes the first lane waiting for it and the others curve into its dot; its first parent keeps its lane, a merge's other parents curve out to a lane already waiting for them or a free one.

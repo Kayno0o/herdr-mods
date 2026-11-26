@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 // Installs the mods into Herdr's home, and the commit hook and the review skill into Claude Code; the hooks in githooks/ run it again after every commit, pull or checkout.
-// Each main.js is linked, so Herdr reloads a mod when setup relinks it; every other file is copied, since Herdr refuses a module behind a symlink.
+// Every file is copied, never linked: Herdr skips what sits behind a symlink and only reloads a mod when a file in its folder is written.
 import type { Keys, Merged } from './install'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { configDir } from '../review/config'
 import { reviewsDir } from '../review/store'
-import { addCommitHook, fillSkill, mergeKeys, patchLayout } from './install'
+import { addCommitHook, copyFile, fillSkill, mergeKeys, patchLayout } from './install'
 
 const REPO = join(import.meta.dir, '..')
 const HERDR = Bun.env.HERDR_APP_HOME || join(homedir(), '.config', 'herdr-app')
@@ -48,20 +48,7 @@ for (const mod of mods) {
   mkdirSync(to, { recursive: true })
 
   for (const file of readdirSync(from).filter(name => !LEFT_OUT.test(name))) {
-    const target = join(to, file)
-
-    if (file === 'main.js') {
-      if (existsSync(target) || lstatSync(target, { throwIfNoEntry: false }))
-        rmSync(target)
-
-      symlinkSync(join(from, file), target)
-    }
-    else {
-      const content = file === 'paths.js' ? Buffer.from(PATHS) : readFileSync(join(from, file))
-
-      if (!existsSync(target) || !readFileSync(target).equals(content))
-        writeFileSync(target, content)
-    }
+    copyFile(join(to, file), file === 'paths.js' ? Buffer.from(PATHS) : readFileSync(join(from, file)))
   }
 
   const keys = readJson<Keys>(join(from, 'keys.json'), {})
