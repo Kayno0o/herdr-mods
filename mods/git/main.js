@@ -497,7 +497,11 @@ export default class Git extends View {
         .child(meta("Author", `${row.author} <${row.email}>`))
         .when(Boolean(info?.committer), (e) => e.child(meta("Committer", info.committer)))
         .child(meta("Date", `${fullDate(row.ts)} · ${shortAge(row.ts)}`))
-
+        .when(Boolean(info), (e) => e.child(h_flex().gap(8)
+          .child(div().w(58).flex_none().text_color(t.dim).child("Changes"))
+          .child(div().text_color(t.muted).child(`${info.files.length} ${info.files.length === 1 ? "file" : "files"}`))
+          .child(div().text_color(t.ansi2).child(`+${info.files.reduce((n, f) => n + f.add, 0)}`))
+          .child(div().text_color(t.ansi1).child(`−${info.files.reduce((n, f) => n + f.del, 0)}`))))
         .when(Boolean(this.reviews?.get(row.hash)), (e) => {
           const review = this.reviews.get(row.hash);
           return e.child(h_flex().id("in-review").gap(8).cursor_pointer().tooltip("Open it in the Review tab").on_click(() => openReview({ item: review.key, commit: row.hash, root: this.root }))
