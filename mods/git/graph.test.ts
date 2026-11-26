@@ -99,6 +99,10 @@ describe('logArgs', () => {
     expect(logArgs({ scope: 'all', remotes: true, limit: 600 })).toContain('--remotes')
     expect(logArgs({ scope: 'current', remotes: true, limit: 300 })).toEqual(['log', '--date-order', '--decorate=full', '-n', '301', `--format=${LOG_FORMAT}`, 'HEAD', '--'])
   })
+
+  test('a search reads the latest 20,000 commits whatever the page', () => {
+    expect(logArgs({ scope: 'current', remotes: true, limit: 300, query: 'fix' })).toEqual(['log', '--date-order', '--decorate=full', '-n', '20000', `--format=${LOG_FORMAT}`, 'HEAD', '--'])
+  })
 })
 
 describe('parseLog against git', () => {
@@ -135,6 +139,47 @@ describe('parseLog against git', () => {
       expect(commits[0].email).toBe('t@x')
       expect(commits[0].ts).toBeGreaterThan(0)
       expect(parseLog(git(...logArgs({ scope: 'all', remotes: false, limit: 2 })), 2)).toMatchObject({ more: true })
+    }
+    finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('a search keeps the commits whose hash starts with it or whose message, author, committer or refs hold it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-graph-'))
+
+    try {
+      const git = (...args: string[]) => {
+        const r = Bun.spawnSync(['git', '-c', 'user.name=T', '-c', 'user.email=t@x', ...args], { cwd: dir, env: gitEnv })
+
+        if (r.exitCode !== 0)
+          throw new Error(r.stderr.toString())
+
+        return r.stdout.toString()
+      }
+
+      git('init', '-q', '-b', 'main')
+      git('commit', '-q', '--allow-empty', '-m', 'first')
+      git('tag', 'v1')
+      git('commit', '-q', '--allow-empty', '--author=Ann Smith <a1@y>', '-m', 'second\n\nThe Body')
+      git('-c', 'user.name=Cid', '-c', 'user.email=c9@z', 'commit', '-q', '--allow-empty', '--author=T <t@x>', '-m', 'third')
+      const out = git(...logArgs({ scope: 'all', remotes: false, limit: 300, query: 'x' }))
+      const found = (query: string, limit = 300) => parseLog(out, limit, query).commits.map((c: { subject: string }) => c.subject)
+      const first = parseLog(out, 300).commits[2].hash
+
+      expect(found('SECOND')).toEqual(['second'])
+      expect(found('the body')).toEqual(['second'])
+      expect(found('smith')).toEqual(['second'])
+      expect(found('a1@y')).toEqual(['second'])
+      expect(found('cid')).toEqual(['third'])
+      expect(found('c9@z')).toEqual(['third'])
+      expect(found('v1')).toEqual(['first'])
+      expect(found(first.slice(0, 7).toUpperCase())).toEqual(['first'])
+      expect(found(first.slice(1, 9))).toEqual([])
+      expect(found('t@x')).toEqual(['third', 'second', 'first'])
+      expect(parseLog(out, 2, 't@x')).toMatchObject({ more: true })
+      expect(parseLog(out, 3, 't@x')).toMatchObject({ more: false })
+      expect(parseLog(out, 300, 'x', 3)).toMatchObject({ partial: true })
+      expect(parseLog(out, 300, 'x', 4)).toMatchObject({ partial: false })
+      expect(parseLog(out, 300, '', 3)).toMatchObject({ partial: false })
     }
     finally { rmSync(dir, { recursive: true, force: true }) }
   })
