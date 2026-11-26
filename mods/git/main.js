@@ -2,7 +2,7 @@
 // Right-click a row for git's actions on its commit and on each label it carries, double-click it to check out its branch; menus and dialogs are overlays of this mod (overlay.js).
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, v_resizable, resizable_panel } from "gpui-base";
 import { agents, spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, props, shared, setShared, run } from "herdr";
 import { CURRENT, logArgs, parseLog, SEARCH_DEPTH, lanesOf, labelsOf, shortAge, fullDate, diffRows, cut, patchChunks, fileTree, commitRows, numstat, lineCounts, countableArgs, parseCountable, trackerOf, ticketLink, tilidUrl, FIND_TILIDRC } from "./graph.js";
 import { CHANGED, Menu, Dialog, act, openMenu, openDialog, runPlan } from "./overlay.js";
@@ -466,7 +466,7 @@ export default class Git extends View {
     const item = (i) => i < rows.length ? this.graphRow(rows[i], t, width)
       : !this.more ? div().h(ROW_H).flex_none().px(8).flex().items_center().text_color(t.dim).child(`Searched the latest ${SEARCH_DEPTH.toLocaleString("en")} commits`)
       : more().h(ROW_H).flex_none().px(8).flex().items_center().rounded(4).text_color(t.accent).cursor_pointer().hover((x) => x.bg(t.hover)).child(this.loading ? "Loading more commits…" : `Load ${PAGE} more commits`);
-    return div().relative().h(Math.max(140, Math.round((this.height || 600) * 0.4))).flex_none().px(6).py(4).border_b(1).border_color(t.border)
+    return div().relative().size_full().px(6).py(4).border_b(1).border_color(t.border)
       .font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
       .when(!rows.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading…" : !this.root ? "No folder" : this.query ? `No commit matches “${this.query}”` : "No commits yet"))))
       .when(rows.length > 0, (e) => e
@@ -621,7 +621,15 @@ export default class Git extends View {
       .when(this.picking, (e) => e.child(v_flex().id("branches").flex_none().max_h(180).overflow_y_scrollbar().p(6).gap(2).border_b(1).border_color(t.border)
         .children((this.branches ?? []).map((b) => div().id(`br-${b}`).h(26).px(8).flex().items_center().rounded(6).text_size(12).when(b === this.branch, (x) => x.text_color(t.accent)).cursor_pointer().hover((x) => x.bg(t.hover)).on_click((_e, cx) => this.act("Switch", ["switch", b], cx)).child(div().flex_1().child(b)).when(b !== this.branch, (x) => x.child(div().id(`merge-${b}`).px(6).rounded(4).text_size(11).text_color(t.muted).hover((y) => y.bg(t.raised)).on_click((_e, cx) => { cx.stop_propagation(); this.act("Merge", ["merge", b], cx); }).child("merge")))))
         .child(div().id("new-branch").h(28).px(8).flex().items_center().rounded(6).border_1().border_color(t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.branchInput).h_full().text_size(12).text_color(t.foreground)))))
-      .child(this.graphList(t))
+      // The graph and the pane below it share a divider to drag, the graph's height kept in the settings
+      .child(v_resizable("git-split").flex_1().min_h(0).on_resize((sizes) => setShared(SETTINGS, { ...this.graphSettings, graphHeight: Math.round(sizes[0]) }))
+        .child(resizable_panel().size(this.graphSettings.graphHeight ?? Math.max(140, Math.round((this.height || 600) * 0.4))).size_range(100).child(this.graphList(t)))
+        .child(resizable_panel().size_range(160).child(this.lowerPane(t, current, enabled))));
+  }
+
+  // What the picked row shows under the graph: Current's files, diff and commit box, or a commit's details, tree and diffs.
+  lowerPane(t, current, enabled) {
+    return v_flex().size_full().min_h(0)
       .when(current, (e) => e.child(this.currentFiles(t)))
       .when(!current, (e) => e.child(this.commitDetails(t)).child(this.commitBody(t)))
       .when(current, (e) => e.child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
